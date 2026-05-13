@@ -173,9 +173,7 @@ async fn persist(
     // sources are conversational and have no trailing structure worth scanning, so
     // they get body_preview = None.
     let body_preview: Option<String> = match source_kind_for_store {
-        SourceKind::Email | SourceKind::Document => {
-            Some(build_body_preview(&canonical.markdown))
-        }
+        SourceKind::Email | SourceKind::Document => Some(build_body_preview(&canonical.markdown)),
         _ => None,
     };
 
@@ -556,8 +554,7 @@ mod tests {
     fn body_preview_long_ascii_truncates_to_trailing_bytes() {
         let long = "A".repeat(4096);
         let preview = super::build_body_preview(&long);
-        assert!(preview.len() >= 2048);
-        assert!(preview.len() <= 2048 + 3); // at most 3 extra bytes from boundary rounding
+        assert_eq!(preview.len(), 2048); // ASCII has no multibyte rounding
     }
 
     #[test]
