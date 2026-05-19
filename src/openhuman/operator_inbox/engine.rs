@@ -47,7 +47,7 @@ pub fn generate_draft(triage_id: &str, tone: ReplyTone) -> Result<DraftReply, St
     rec.proposed_reply = Some(content.clone());
     rec.status = TriageStatus::Drafted;
     let draft = DraftReply {
-        id: format!("dr-{}", &triage_id[3..]),
+        id: format!("dr-{}", triage_id.get(3..).unwrap_or(triage_id)),
         triage_id: triage_id.into(),
         content,
         tone,
@@ -189,6 +189,12 @@ mod tests {
     #[test]
     fn generate_draft_not_found() {
         assert!(generate_draft("nope", ReplyTone::Formal).is_err());
+    }
+
+    #[test]
+    fn generate_draft_short_id_no_panic() {
+        // IDs shorter than 3 chars should not panic on slice.
+        assert!(generate_draft("ab", ReplyTone::Professional).is_err());
     }
     #[test]
     fn schedule_followup_works() {

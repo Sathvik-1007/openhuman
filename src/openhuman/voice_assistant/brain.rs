@@ -272,7 +272,9 @@ fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
         s
     } else {
-        &s[..max]
+        // Find the last char boundary at or before `max` to avoid panicking on multi-byte UTF-8.
+        let end = s.floor_char_boundary(max);
+        &s[..end]
     }
 }
 
@@ -329,6 +331,14 @@ mod tests {
     fn truncate_long_string() {
         let long = "a".repeat(100);
         assert_eq!(truncate(&long, 10).len(), 10);
+    }
+
+    #[test]
+    fn truncate_multibyte_utf8_no_panic() {
+        // Each emoji is 4 bytes. Slicing at byte 5 would split a char and panic without floor_char_boundary.
+        let s = "😀😀😀";
+        let result = truncate(s, 5);
+        assert_eq!(result, "😀"); // 4 bytes fits, 8 doesn't
     }
 
     #[test]
