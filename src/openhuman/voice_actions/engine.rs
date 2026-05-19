@@ -1,0 +1,324 @@
+//! Voice action intent mapping and execution engine.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use super::types::*;
+
+static INTENTS: std::sync::LazyLock<Mutex<HashMap<String, VoiceIntent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Built-in action mappings (keyword → controller action).
+static MAPPINGS: std::sync::LazyLock<Vec<ActionMapping>> = std::sync::LazyLock::new(|| {
+    vec![
+        ActionMapping {
+            pattern: "open settings".into(),
+            namespace: "config".into(),
+            function: "get".into(),
+            safety: ActionSafety::Safe,
+            description: "Open the settings panel".into(),
+        },
+        ActionMapping {
+            pattern: "search".into(),
+            namespace: "memory".into(),
+            function: "search".into(),
+            safety: ActionSafety::Safe,
+            description: "Search knowledge base".into(),
+        },
+        ActionMapping {
+            pattern: "start voice".into(),
+            namespace: "voice_assistant".into(),
+            function: "start_session".into(),
+            safety: ActionSafety::Safe,
+            description: "Start a voice assistant session".into(),
+        },
+        ActionMapping {
+            pattern: "stop voice".into(),
+            namespace: "voice_assistant".into(),
+            function: "stop_session".into(),
+            safety: ActionSafety::Safe,
+            description: "Stop the voice assistant session".into(),
+        },
+        ActionMapping {
+            pattern: "create draft".into(),
+            namespace: "channels".into(),
+            function: "create_draft".into(),
+            safety: ActionSafety::Safe,
+            description: "Create a message draft".into(),
+        },
+        ActionMapping {
+            pattern: "send message".into(),
+            namespace: "channels".into(),
+            function: "send".into(),
+            safety: ActionSafety::RequiresConfirmation,
+            description: "Send a message (requires confirmation)".into(),
+        },
+        ActionMapping {
+            pattern: "delete".into(),
+            namespace: "memory".into(),
+            function: "delete".into(),
+            safety: ActionSafety::Destructive,
+            description: "Delete data (destructive, requires confirmation)".into(),
+        },
+        ActionMapping {
+            pattern: "check health".into(),
+            namespace: "health".into(),
+            function: "check".into(),
+            safety: ActionSafety::Safe,
+            description: "Run health diagnostics".into(),
+        },
+        ActionMapping {
+            pattern: "list skills".into(),
+            namespace: "skills".into(),
+            function: "list".into(),
+            safety: ActionSafety::Safe,
+            description: "List available skills".into(),
+        },
+        ActionMapping {
+            pattern: "start flow".into(),
+            namespace: "guided_flows".into(),
+            function: "list_flows".into(),
+            safety: ActionSafety::Safe,
+            description: "List guided recommendation flows".into(),
+        },
+    ]
+});
+
+/// Recognize intent from an utterance using keyword matching.
+pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
+    let lower = utterance.to_lowercase();
+    let mut best: Option<(&ActionMapping, f64)> = None;
+
+    for mapping in MAPPINGS.iter() {
+        if lower.contains(&mapping.pattern) {
+            let confidence = mapping.pattern.len() as f64 / lower.len().max(1) as f64;
+            let conf = confidence.min(0.99);
+            if best.as_ref().map_or(true, |(_, c)| conf > *c) {
+                best = Some((mapping, conf));
+            }
+        }
+    }
+
+    let (mapping, confidence) =
+        best.ok_or_else(|| format!("no matching action for: {utterance}"))?;
+
+    let id = uuid_v4();
+    let intent = VoiceIntent {
+        id: id.clone(),
+        utterance: utterance.to_string(),
+        action: mapping.description.clone(),
+        namespace: mapping.namespace.clone(),
+        function: mapping.function.clone(),
+        confidence,
+        safety: mapping.safety.clone(),
+        status: if mapping.safety == ActionSafety::Safe {
+            IntentStatus::Confirmed
+        } else {
+            IntentStatus::Pending
+        },
+        params: extract_params(utterance, mapping),
+        result: None,
+        error: None,
+        created_at: now_epoch(),
+    };
+
+    INTENTS.lock().unwrap().insert(id, intent.clone());
+    tracing::info!(intent_id = %intent.id, action = %intent.action, "[voice_actions] intent recognized");
+    Ok(intent)
+}
+
+/// Confirm a pending intent (for actions requiring confirmation).
+pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
+    let mut store = INTENTS.lock().unwrap();
+    let intent = store
+        .get_mut(intent_id)
+        .ok_or_else(|| format!("intent not found: {intent_id}"))?;
+    if intent.status != IntentStatus::Pending {
+        return Err(format!("intent is not pending: {:?}", intent.status));
+    }
+    intent.status = IntentStatus::Confirmed;
+    tracing::info!(intent_id, "[voice_actions] intent confirmed");
+    Ok(intent.clone())
+}
+
+/// Reject a pending intent.
+pub fn reject_intent(intent_id: &str) -> Result<VoiceIntent, String> {
+    let mut store = INTENTS.lock().unwrap();
+    let intent = store
+        .get_mut(intent_id)
+        .ok_or_else(|| format!("intent not found: {intent_id}"))?;
+    if intent.status != IntentStatus::Pending {
+        return Err(format!("intent is not pending: {:?}", intent.status));
+    }
+    intent.status = IntentStatus::Rejected;
+    Ok(intent.clone())
+}
+
+/// Mark intent as executed (called after controller dispatch succeeds).
+pub fn mark_executed(intent_id: &str, result: serde_json::Value) -> Result<VoiceIntent, String> {
+    let mut store = INTENTS.lock().unwrap();
+    let intent = store
+        .get_mut(intent_id)
+        .ok_or_else(|| format!("intent not found: {intent_id}"))?;
+    if intent.status != IntentStatus::Confirmed {
+        return Err("intent must be confirmed before execution".into());
+    }
+    intent.status = IntentStatus::Executed;
+    intent.result = Some(result);
+    Ok(intent.clone())
+}
+
+/// Mark intent as failed.
+pub fn mark_failed(intent_id: &str, error: &str) -> Result<VoiceIntent, String> {
+    let mut store = INTENTS.lock().unwrap();
+    let intent = store
+        .get_mut(intent_id)
+        .ok_or_else(|| format!("intent not found: {intent_id}"))?;
+    intent.status = IntentStatus::Failed;
+    intent.error = Some(error.to_string());
+    Ok(intent.clone())
+}
+
+/// Get intent by ID.
+pub fn get_intent(intent_id: &str) -> Result<VoiceIntent, String> {
+    INTENTS
+        .lock()
+        .unwrap()
+        .get(intent_id)
+        .cloned()
+        .ok_or_else(|| format!("intent not found: {intent_id}"))
+}
+
+/// List all registered action mappings.
+pub fn list_mappings() -> Vec<ActionMapping> {
+    MAPPINGS.clone()
+}
+
+fn extract_params(utterance: &str, mapping: &ActionMapping) -> serde_json::Value {
+    // Extract the part after the pattern as a query parameter
+    let lower = utterance.to_lowercase();
+    let after = lower.split(&mapping.pattern).nth(1).unwrap_or("").trim();
+    if after.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({ "query": after })
+    }
+}
+
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("va-{:x}-{:x}", t.as_secs(), t.subsec_nanos())
+}
+
+fn now_epoch() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognize_open_settings() {
+        let i = recognize_intent("open settings please").unwrap();
+        assert_eq!(i.namespace, "config");
+        assert_eq!(i.function, "get");
+        assert_eq!(i.safety, ActionSafety::Safe);
+        assert_eq!(i.status, IntentStatus::Confirmed); // safe = auto-confirmed
+    }
+
+    #[test]
+    fn recognize_search_with_query() {
+        let i = recognize_intent("search for meeting notes").unwrap();
+        assert_eq!(i.namespace, "memory");
+        assert_eq!(i.function, "search");
+        assert_eq!(i.params["query"], "for meeting notes");
+    }
+
+    #[test]
+    fn recognize_send_requires_confirmation() {
+        let i = recognize_intent("send message to Alice").unwrap();
+        assert_eq!(i.safety, ActionSafety::RequiresConfirmation);
+        assert_eq!(i.status, IntentStatus::Pending);
+    }
+
+    #[test]
+    fn recognize_delete_is_destructive() {
+        let i = recognize_intent("delete old files").unwrap();
+        assert_eq!(i.safety, ActionSafety::Destructive);
+        assert_eq!(i.status, IntentStatus::Pending);
+    }
+
+    #[test]
+    fn recognize_unknown_errors() {
+        assert!(recognize_intent("fly me to the moon").is_err());
+    }
+
+    #[test]
+    fn confirm_pending_intent() {
+        let i = recognize_intent("send message now").unwrap();
+        assert_eq!(i.status, IntentStatus::Pending);
+        let i = confirm_intent(&i.id).unwrap();
+        assert_eq!(i.status, IntentStatus::Confirmed);
+    }
+
+    #[test]
+    fn reject_pending_intent() {
+        let i = recognize_intent("delete everything").unwrap();
+        let i = reject_intent(&i.id).unwrap();
+        assert_eq!(i.status, IntentStatus::Rejected);
+    }
+
+    #[test]
+    fn confirm_non_pending_errors() {
+        let i = recognize_intent("open settings").unwrap(); // auto-confirmed
+        assert!(confirm_intent(&i.id).is_err());
+    }
+
+    #[test]
+    fn mark_executed_works() {
+        let i = recognize_intent("check health status").unwrap();
+        let i = mark_executed(&i.id, serde_json::json!({"status": "ok"})).unwrap();
+        assert_eq!(i.status, IntentStatus::Executed);
+        assert_eq!(i.result.unwrap()["status"], "ok");
+    }
+
+    #[test]
+    fn mark_failed_works() {
+        let i = recognize_intent("start voice session").unwrap();
+        let i = mark_failed(&i.id, "no microphone").unwrap();
+        assert_eq!(i.status, IntentStatus::Failed);
+        assert_eq!(i.error.unwrap(), "no microphone");
+    }
+
+    #[test]
+    fn get_intent_works() {
+        let i = recognize_intent("list skills available").unwrap();
+        let fetched = get_intent(&i.id).unwrap();
+        assert_eq!(fetched.id, i.id);
+    }
+
+    #[test]
+    fn get_intent_not_found() {
+        assert!(get_intent("nope").is_err());
+    }
+
+    #[test]
+    fn list_mappings_not_empty() {
+        assert!(list_mappings().len() >= 8);
+    }
+
+    #[test]
+    fn longer_pattern_wins() {
+        // "start voice" should match over "start flow"
+        let i = recognize_intent("start voice assistant").unwrap();
+        assert_eq!(i.namespace, "voice_assistant");
+    }
+}

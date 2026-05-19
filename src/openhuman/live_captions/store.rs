@@ -1,0 +1,268 @@
+//! In-memory transcript store with caption streaming.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use super::types::*;
+
+static TRANSCRIPTS: std::sync::LazyLock<Mutex<HashMap<String, Transcript>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub fn start_transcript(
+    id: Option<String>,
+    source: CaptionSource,
+    title: Option<String>,
+) -> Transcript {
+    let tid = id.unwrap_or_else(uuid_v4);
+    let now = now_epoch();
+    let t = Transcript {
+        id: tid.clone(),
+        source,
+        state: TranscriptState::Recording,
+        title,
+        segments: Vec::new(),
+        summary: None,
+        created_at: now,
+        updated_at: now,
+    };
+    TRANSCRIPTS.lock().unwrap().insert(tid, t.clone());
+    tracing::info!(transcript_id = %t.id, "[live_captions] transcript started");
+    t
+}
+
+pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Transcript, String> {
+    let mut store = TRANSCRIPTS.lock().unwrap();
+    let t = store
+        .get_mut(transcript_id)
+        .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
+    if t.state != TranscriptState::Recording {
+        return Err("transcript is not recording".into());
+    }
+    t.segments.push(segment);
+    t.updated_at = now_epoch();
+    Ok(t.clone())
+}
+
+pub fn pause_transcript(transcript_id: &str) -> Result<Transcript, String> {
+    let mut store = TRANSCRIPTS.lock().unwrap();
+    let t = store
+        .get_mut(transcript_id)
+        .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
+    if t.state != TranscriptState::Recording {
+        return Err("transcript is not recording".into());
+    }
+    t.state = TranscriptState::Paused;
+    t.updated_at = now_epoch();
+    Ok(t.clone())
+}
+
+pub fn resume_transcript(transcript_id: &str) -> Result<Transcript, String> {
+    let mut store = TRANSCRIPTS.lock().unwrap();
+    let t = store
+        .get_mut(transcript_id)
+        .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
+    if t.state != TranscriptState::Paused {
+        return Err("transcript is not paused".into());
+    }
+    t.state = TranscriptState::Recording;
+    t.updated_at = now_epoch();
+    Ok(t.clone())
+}
+
+pub fn complete_transcript(transcript_id: &str) -> Result<Transcript, String> {
+    let mut store = TRANSCRIPTS.lock().unwrap();
+    let t = store
+        .get_mut(transcript_id)
+        .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
+    t.state = TranscriptState::Completed;
+    t.updated_at = now_epoch();
+    tracing::info!(
+        transcript_id,
+        segments = t.segments.len(),
+        "[live_captions] transcript completed"
+    );
+    Ok(t.clone())
+}
+
+pub fn summarize_transcript(transcript_id: &str) -> Result<Transcript, String> {
+    let mut store = TRANSCRIPTS.lock().unwrap();
+    let t = store
+        .get_mut(transcript_id)
+        .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
+    if t.state != TranscriptState::Completed {
+        return Err("transcript must be completed before summarizing".into());
+    }
+    // Simple extractive summary: first and last segments + word count
+    let full = t.full_text();
+    let word_count = full.split_whitespace().count();
+    let duration_s = t.duration_ms() / 1000;
+    let summary = format!(
+        "Transcript ({} words, {}s). {} segments from {:?} source.",
+        word_count,
+        duration_s,
+        t.segments.len(),
+        t.source
+    );
+    t.summary = Some(summary);
+    t.updated_at = now_epoch();
+    Ok(t.clone())
+}
+
+pub fn get_transcript(transcript_id: &str) -> Result<Transcript, String> {
+    TRANSCRIPTS
+        .lock()
+        .unwrap()
+        .get(transcript_id)
+        .cloned()
+        .ok_or_else(|| format!("transcript not found: {transcript_id}"))
+}
+
+pub fn list_transcripts() -> Vec<Transcript> {
+    TRANSCRIPTS.lock().unwrap().values().cloned().collect()
+}
+
+fn uuid_v4() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("lc-{:x}-{:x}", t.as_secs(), t.subsec_nanos())
+}
+
+fn now_epoch() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_creates_transcript() {
+        let t = start_transcript(Some("st-1".into()), CaptionSource::Microphone, None);
+        assert_eq!(t.id, "st-1");
+        assert_eq!(t.state, TranscriptState::Recording);
+        assert!(t.segments.is_empty());
+    }
+
+    #[test]
+    fn append_segment_works() {
+        start_transcript(Some("st-2".into()), CaptionSource::Microphone, None);
+        let seg = CaptionSegment {
+            text: "Hello".into(),
+            start_ms: 0,
+            end_ms: 500,
+            speaker: None,
+            confidence: 0.9,
+            is_final: true,
+        };
+        let t = append_segment("st-2", seg).unwrap();
+        assert_eq!(t.segments.len(), 1);
+        assert_eq!(t.segments[0].text, "Hello");
+    }
+
+    #[test]
+    fn append_to_nonexistent_errors() {
+        assert!(append_segment(
+            "nope",
+            CaptionSegment {
+                text: "x".into(),
+                start_ms: 0,
+                end_ms: 0,
+                speaker: None,
+                confidence: 0.0,
+                is_final: true,
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pause_and_resume() {
+        start_transcript(Some("st-3".into()), CaptionSource::Microphone, None);
+        let t = pause_transcript("st-3").unwrap();
+        assert_eq!(t.state, TranscriptState::Paused);
+        // Can't append while paused
+        assert!(append_segment(
+            "st-3",
+            CaptionSegment {
+                text: "x".into(),
+                start_ms: 0,
+                end_ms: 0,
+                speaker: None,
+                confidence: 0.0,
+                is_final: true,
+            }
+        )
+        .is_err());
+        let t = resume_transcript("st-3").unwrap();
+        assert_eq!(t.state, TranscriptState::Recording);
+    }
+
+    #[test]
+    fn complete_and_summarize() {
+        start_transcript(
+            Some("st-4".into()),
+            CaptionSource::MeetCall,
+            Some("Meeting".into()),
+        );
+        append_segment(
+            "st-4",
+            CaptionSegment {
+                text: "First point".into(),
+                start_ms: 0,
+                end_ms: 2000,
+                speaker: Some("Alice".into()),
+                confidence: 0.95,
+                is_final: true,
+            },
+        )
+        .unwrap();
+        append_segment(
+            "st-4",
+            CaptionSegment {
+                text: "Second point".into(),
+                start_ms: 2000,
+                end_ms: 4000,
+                speaker: Some("Bob".into()),
+                confidence: 0.9,
+                is_final: true,
+            },
+        )
+        .unwrap();
+        let t = complete_transcript("st-4").unwrap();
+        assert_eq!(t.state, TranscriptState::Completed);
+        let t = summarize_transcript("st-4").unwrap();
+        assert!(t.summary.is_some());
+        assert!(t.summary.unwrap().contains("2 segments"));
+    }
+
+    #[test]
+    fn summarize_requires_completed() {
+        start_transcript(Some("st-5".into()), CaptionSource::Microphone, None);
+        assert!(summarize_transcript("st-5").is_err());
+    }
+
+    #[test]
+    fn get_transcript_works() {
+        start_transcript(Some("st-6".into()), CaptionSource::SystemAudio, None);
+        let t = get_transcript("st-6").unwrap();
+        assert_eq!(t.source, CaptionSource::SystemAudio);
+    }
+
+    #[test]
+    fn get_transcript_not_found() {
+        assert!(get_transcript("nope").is_err());
+    }
+
+    #[test]
+    fn list_transcripts_returns_all() {
+        start_transcript(Some("st-7".into()), CaptionSource::Microphone, None);
+        let all = list_transcripts();
+        assert!(all.iter().any(|t| t.id == "st-7"));
+    }
+}

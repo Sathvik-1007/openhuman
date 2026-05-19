@@ -1271,6 +1271,109 @@ const CAPABILITIES: &[Capability] = &[
             destinations: &[],
         }),
     },
+    // ── Voice Assistant ─────────────────────────────────────────────────────
+    Capability {
+        id: "voice_assistant.session",
+        name: "Standalone Voice Assistant",
+        domain: "voice_assistant",
+        category: CapabilityCategory::Automation,
+        description: "A local-first conversational voice assistant that uses free/open STT \
+                      (Whisper via whisper.cpp) and TTS (Piper) to provide hands-free desktop \
+                      interaction. Mic audio is processed locally by default; cloud fallback \
+                      available when configured.",
+        how_to: "Start a voice session via RPC: openhuman.voice_assistant_start_session.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &[],
+        }),
+    },
+    // ── Guided Flows ────────────────────────────────────────────────────────
+    Capability {
+        id: "guided_flows.recommendation",
+        name: "Guided Recommendation Flows",
+        domain: "guided_flows",
+        category: CapabilityCategory::Automation,
+        description: "Reusable quiz-style or conversational intake flows that guide users to \
+                      recommendations, decisions, or next actions. Includes a built-in onboarding \
+                      setup guide with branching logic and rule-based recommendation generation.",
+        how_to: "Start a flow via RPC: openhuman.guided_flows_start_flow with flow_id.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &[],
+        }),
+    },
+    // ── Live Captions ───────────────────────────────────────────────────────
+    Capability {
+        id: "live_captions.transcript",
+        name: "Live Captions & Transcripts",
+        domain: "live_captions",
+        category: CapabilityCategory::Automation,
+        description: "Real-time captioning from microphone or system audio with transcript \
+                      persistence and meeting-note summarization. Segments are streamed as \
+                      they arrive from the STT engine.",
+        how_to: "Start via RPC: openhuman.live_captions_start_transcript with source.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &[],
+        }),
+    },
+    // ── Voice Actions ────────────────────────────────────────────────────────
+    Capability {
+        id: "voice_actions.intent",
+        name: "Voice-Driven Actions",
+        domain: "voice_actions",
+        category: CapabilityCategory::Automation,
+        description: "Maps recognized utterances to controller-backed desktop actions with \
+                      safety levels (safe, requires_confirmation, destructive) and execution tracking.",
+        how_to: "Recognize via RPC: openhuman.voice_actions_recognize with utterance.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &[],
+        }),
+    },
+    // ── Operator Inbox ──────────────────────────────────────────────────────
+    Capability {
+        id: "operator_inbox.triage",
+        name: "Operator Inbox Assistant",
+        domain: "operator_inbox",
+        category: CapabilityCategory::Automation,
+        description: "Channel-agnostic message triage with priority scoring, contextual draft \
+                      reply generation, and follow-up scheduling.",
+        how_to: "Triage via RPC: openhuman.operator_inbox_triage_message with sender/subject/body.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &[],
+        }),
+    },
+    // ── Chat with Data ──────────────────────────────────────────────────────
+    Capability {
+        id: "chat_with_data.query",
+        name: "Chat-with-Data Analytics",
+        domain: "chat_with_data",
+        category: CapabilityCategory::Automation,
+        description: "Natural-language querying over local/connected datasets with proactive \
+                      insight generation (anomaly detection, trend analysis, summaries).",
+        how_to: "Query via RPC: openhuman.chat_with_data_query with dataset_id and question.",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: false,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &[],
+        }),
+    },
+            destinations: &[],
+        }),
+    },
     // ── Update ──────────────────────────────────────────────────────────────
     Capability {
         id: "update.check",
