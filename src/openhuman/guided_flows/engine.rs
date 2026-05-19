@@ -102,6 +102,9 @@ pub fn submit_answer(
     step_id: &str,
     value: serde_json::Value,
 ) -> Result<FlowSession, String> {
+    // Lock ordering: FLOWS first, then SESSIONS (matches start_flow).
+    let flows = FLOWS.lock().unwrap();
+
     let mut sessions = SESSIONS.lock().unwrap();
     let session = sessions
         .get_mut(session_id)
@@ -116,7 +119,6 @@ pub fn submit_answer(
         ));
     }
 
-    let flows = FLOWS.lock().unwrap();
     let def = flows
         .get(&session.flow_id)
         .ok_or_else(|| format!("flow definition missing: {}", session.flow_id))?;

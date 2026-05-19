@@ -379,6 +379,18 @@ fn build_declared_controller_schemas() -> Vec<ControllerSchema> {
     schemas.extend(crate::openhuman::whatsapp_data::all_whatsapp_data_controller_schemas());
     // Mobile device pairing and management
     schemas.extend(crate::openhuman::devices::all_devices_controller_schemas());
+    // Standalone voice assistant
+    schemas.extend(crate::openhuman::voice_assistant::all_voice_assistant_controller_schemas());
+    // Guided recommendation flows
+    schemas.extend(crate::openhuman::guided_flows::all_guided_flows_controller_schemas());
+    // Live captions and transcripts
+    schemas.extend(crate::openhuman::live_captions::all_live_captions_controller_schemas());
+    // Voice-driven actions
+    schemas.extend(crate::openhuman::voice_actions::all_voice_actions_controller_schemas());
+    // Operator inbox triage
+    schemas.extend(crate::openhuman::operator_inbox::all_operator_inbox_controller_schemas());
+    // Chat-with-data analytics
+    schemas.extend(crate::openhuman::chat_with_data::all_chat_with_data_controller_schemas());
     schemas
 }
 
