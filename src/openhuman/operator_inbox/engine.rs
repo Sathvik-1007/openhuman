@@ -16,6 +16,18 @@ pub fn triage_message(
 ) -> TriageRecord {
     let priority = score_priority(subject, body);
     let reason = priority_reason(&priority, subject, body);
+    triage_message_with_priority(source, sender, subject, body, priority, &reason)
+}
+
+/// Triage with an externally-determined priority (e.g. from LLM classification).
+pub fn triage_message_with_priority(
+    source: MessageSource,
+    sender: &str,
+    subject: &str,
+    body: &str,
+    priority: TriagePriority,
+    reason: &str,
+) -> TriageRecord {
     let id = uuid_v4();
     let rec = TriageRecord {
         id: id.clone(),
@@ -24,7 +36,7 @@ pub fn triage_message(
         subject: subject.into(),
         body_preview: body.chars().take(200).collect(),
         priority,
-        reason,
+        reason: reason.to_string(),
         proposed_reply: None,
         follow_up_at: None,
         status: TriageStatus::Pending,

@@ -1,6 +1,7 @@
 //! RPC handlers for guided_flows domain.
 
 use serde_json::{json, Map, Value};
+use tracing::debug;
 
 use super::engine;
 
@@ -54,9 +55,11 @@ pub async fn handle_submit_answer(p: Map<String, Value>) -> Result<Value, String
                 "current_step": s.current_step,
             });
             if let Some(rec) = &s.recommendation {
+                // Enhance recommendation with LLM-generated personalized summary.
+                let personalized = try_llm_personalize(rec, &s.answers).await;
                 resp["recommendation"] = json!({
                     "title": rec.title,
-                    "summary": rec.summary,
+                    "summary": personalized.as_deref().unwrap_or(&rec.summary),
                     "confidence": rec.confidence,
                     "next_actions": rec.next_actions,
                 });
@@ -65,6 +68,39 @@ pub async fn handle_submit_answer(p: Map<String, Value>) -> Result<Value, String
         }
         Err(e) => Ok(json!({ "ok": false, "error": e })),
     }
+}
+
+/// LLM-powered personalization of flow recommendations based on user answers.
+async fn try_llm_personalize(
+    rec: &super::types::Recommendation,
+    answers: &[super::types::StepAnswer],
+) -> Option<String> {
+    use crate::openhuman::config::ops::load_config_with_timeout;
+    use crate::openhuman::inference::provider::create_chat_provider;
+
+    let config = load_config_with_timeout().await.ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
+
+    let answers_text: String = answers
+        .iter()
+        .map(|a| format!("- {}: {}", a.step_id, serde_json::to_string(&a.value).unwrap_or_default()))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = format!(
+        "Based on these user preferences, write a personalized 2-3 sentence recommendation summary.\n\nRecommendation: {}\nUser answers:\n{}\nNext actions: {}\n\nPersonalized summary:",
+        rec.title, answers_text, rec.next_actions.join(", ")
+    );
+
+    let system = "You are a setup assistant. Write warm, personalized recommendations that reference the user's specific choices. Be concise and actionable.";
+
+    let text = provider
+        .chat_with_system(Some(system), &prompt, &model, 0.6)
+        .await
+        .ok()?;
+
+    debug!("[guided_flows] LLM personalization generated");
+    Some(text.trim().to_string())
 }
 
 pub async fn handle_get_session(p: Map<String, Value>) -> Result<Value, String> {

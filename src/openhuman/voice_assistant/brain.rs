@@ -155,36 +155,26 @@ async fn run_llm(
     transcript: &str,
     history: &[(String, String)],
 ) -> Result<String, String> {
-    use crate::api::config::effective_backend_api_url;
-    use crate::api::jwt::get_session_token;
-    use crate::api::BackendOAuthClient;
-    use reqwest::Method;
+    use crate::openhuman::inference::provider::create_chat_provider;
+    use crate::openhuman::inference::provider::traits::ChatMessage;
 
-    let token = get_session_token(config)
-        .map_err(|e| e.to_string())?
-        .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| format!("{LOG_PREFIX} no backend session token"))?;
+    let (provider, model) = create_chat_provider("agentic", config)
+        .map_err(|e| format!("{LOG_PREFIX} LLM provider creation failed: {e}"))?;
 
-    let api_url = effective_backend_api_url(&config.api_url);
-    let client = BackendOAuthClient::new(&api_url).map_err(|e| e.to_string())?;
-
-    // Build messages array for the LLM.
-    let system_msg = json!({
-        "role": "system",
-        "content": "You are a helpful voice assistant. Keep responses concise and conversational — \
-                    the user is speaking to you and will hear your reply read aloud. \
-                    Avoid markdown, code blocks, or long lists unless explicitly asked."
-    });
-
-    let mut messages = vec![system_msg];
+    // Build messages with conversation history.
+    let mut messages = vec![ChatMessage::system(
+        "You are a helpful voice assistant. Keep responses concise and conversational — \
+         the user is speaking to you and will hear your reply read aloud. \
+         Avoid markdown, code blocks, or long lists unless explicitly asked.",
+    )];
 
     // Add conversation history (last 10 turns max for context window).
     for (user, assistant) in history.iter().rev().take(10).rev() {
-        messages.push(json!({"role": "user", "content": user}));
-        messages.push(json!({"role": "assistant", "content": assistant}));
+        messages.push(ChatMessage::user(user));
+        messages.push(ChatMessage::assistant(assistant));
     }
 
-    messages.push(json!({"role": "user", "content": transcript}));
+    messages.push(ChatMessage::user(transcript));
 
     debug!(
         "{LOG_PREFIX} LLM request messages={} transcript_len={}",
@@ -192,25 +182,10 @@ async fn run_llm(
         transcript.len()
     );
 
-    let body = json!({
-        "model": "agentic-v1",
-        "temperature": 0.5,
-        "max_tokens": 300,
-        "messages": messages,
-    });
-
-    let raw = client
-        .authed_json(
-            &token,
-            Method::POST,
-            "/openai/v1/chat/completions",
-            Some(body),
-        )
+    let text = provider
+        .chat_with_history(&messages, &model, 0.5)
         .await
         .map_err(|e| format!("{LOG_PREFIX} LLM request failed: {e}"))?;
-
-    let text = extract_chat_completion_text(&raw)
-        .ok_or_else(|| format!("{LOG_PREFIX} unexpected LLM response: {raw}"))?;
 
     Ok(strip_for_speech(&text))
 }

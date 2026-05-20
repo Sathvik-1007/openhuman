@@ -33,7 +33,7 @@ pub fn start_transcript(
 
 pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Transcript, String> {
     debug!(transcript_id = %transcript_id, text_len = segment.text.len(), "[live_captions] segment appended");
-    let mut store = TRANSCRIPTS.lock().unwrap();
+    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -46,7 +46,7 @@ pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Tr
 }
 
 pub fn pause_transcript(transcript_id: &str) -> Result<Transcript, String> {
-    let mut store = TRANSCRIPTS.lock().unwrap();
+    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -59,7 +59,7 @@ pub fn pause_transcript(transcript_id: &str) -> Result<Transcript, String> {
 }
 
 pub fn resume_transcript(transcript_id: &str) -> Result<Transcript, String> {
-    let mut store = TRANSCRIPTS.lock().unwrap();
+    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -72,7 +72,7 @@ pub fn resume_transcript(transcript_id: &str) -> Result<Transcript, String> {
 }
 
 pub fn complete_transcript(transcript_id: &str) -> Result<Transcript, String> {
-    let mut store = TRANSCRIPTS.lock().unwrap();
+    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -84,7 +84,7 @@ pub fn complete_transcript(transcript_id: &str) -> Result<Transcript, String> {
 
 pub fn summarize_transcript(transcript_id: &str) -> Result<Transcript, String> {
     info!(transcript_id = %transcript_id, "[live_captions] summarizing");
-    let mut store = TRANSCRIPTS.lock().unwrap();
+    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -110,7 +110,7 @@ pub fn summarize_transcript(transcript_id: &str) -> Result<Transcript, String> {
 pub fn get_transcript(transcript_id: &str) -> Result<Transcript, String> {
     TRANSCRIPTS
         .lock()
-        .unwrap()
+        .map_err(|e| format!("lock poisoned: {e}"))?
         .get(transcript_id)
         .cloned()
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))
@@ -118,6 +118,25 @@ pub fn get_transcript(transcript_id: &str) -> Result<Transcript, String> {
 
 pub fn list_transcripts() -> Vec<Transcript> {
     TRANSCRIPTS.lock().unwrap().values().cloned().collect()
+}
+
+/// Search transcripts by text content. Returns transcripts containing the query.
+pub fn search_transcripts(query: &str) -> Vec<Transcript> {
+    let lower_query = query.to_lowercase();
+    TRANSCRIPTS
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|t| {
+            t.segments
+                .iter()
+                .any(|s| s.text.to_lowercase().contains(&lower_query))
+                || t.title
+                    .as_ref()
+                    .map_or(false, |title| title.to_lowercase().contains(&lower_query))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Set summary directly (used when LLM generates the summary).
@@ -129,11 +148,7 @@ pub fn set_summary(transcript_id: &str, summary: &str) {
 }
 
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("lc-{:x}-{:x}", t.as_secs(), t.subsec_nanos())
+    format!("lc-{}", uuid::Uuid::new_v4())
 }
 
 fn now_epoch() -> u64 {

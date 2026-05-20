@@ -5,14 +5,67 @@ use serde_json::{json, Map, Value};
 
 pub async fn handle_recognize(p: Map<String, Value>) -> Result<Value, String> {
     let utterance = p.get("utterance").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Fast path: high-confidence pattern match for simple, direct commands.
+    if let Ok(ref i) = engine::recognize_intent(utterance) {
+        if i.confidence >= 0.7 {
+            return Ok(json!({
+                "ok": true, "intent_id": i.id, "action": i.action,
+                "namespace": i.namespace, "function": i.function,
+                "confidence": i.confidence, "safety": i.safety, "status": i.status,
+                "source": "pattern",
+            }));
+        }
+    }
+
+    // Primary path: LLM-based intent extraction for all other utterances.
+    if let Some(extracted) = try_llm_recognize(utterance).await {
+        return Ok(json!({
+            "ok": true, "action": extracted.action,
+            "confidence": extracted.confidence, "safety": extracted.safety,
+            "description": extracted.description, "params": extracted.params,
+            "source": "llm",
+        }));
+    }
+
+    // Fallback: use whatever pattern matching found (even low confidence).
     match engine::recognize_intent(utterance) {
         Ok(i) => Ok(json!({
             "ok": true, "intent_id": i.id, "action": i.action,
             "namespace": i.namespace, "function": i.function,
             "confidence": i.confidence, "safety": i.safety, "status": i.status,
+            "source": "pattern_fallback",
         })),
-        Err(e) => Ok(json!({ "ok": false, "error": e })),
+        Err(_) => Ok(json!({ "ok": false, "error": format!("no matching action for: {utterance}") })),
     }
+}
+
+/// LLM-based intent extraction — the primary intelligence path.
+/// Pattern matching serves as a fast-path optimization for simple commands.
+async fn try_llm_recognize(utterance: &str) -> Option<super::llm_intent::ExtractedIntent> {
+    use super::llm_intent;
+    use crate::openhuman::config::ops::load_config_with_timeout;
+    use crate::openhuman::inference::provider::create_chat_provider;
+    use tracing::debug;
+
+    let actions: Vec<(String, String, super::types::ActionSafety)> = engine::list_mappings()
+        .iter()
+        .map(|m| (m.namespace.clone(), m.function.clone(), m.safety.clone()))
+        .collect();
+
+    let system = llm_intent::build_intent_prompt(&actions);
+    let user_msg = llm_intent::build_user_message(utterance);
+
+    let config = load_config_with_timeout().await.ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
+
+    let response = provider
+        .chat_with_system(Some(&system), &user_msg, &model, 0.2)
+        .await
+        .ok()?;
+
+    debug!(response_len = response.len(), "[voice_actions] LLM intent response received");
+    llm_intent::parse_llm_response(&response)
 }
 
 pub async fn handle_confirm(p: Map<String, Value>) -> Result<Value, String> {

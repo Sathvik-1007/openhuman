@@ -158,6 +158,89 @@ pub async fn handle_list_transcripts(_p: Map<String, Value>) -> Result<Value, St
     Ok(json!({ "ok": true, "transcripts": list }))
 }
 
+pub async fn handle_search_transcripts(p: Map<String, Value>) -> Result<Value, String> {
+    let query = p.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    if query.is_empty() {
+        return Ok(json!({ "ok": false, "error": "query is required" }));
+    }
+    let results = store::search_transcripts(query);
+    let list: Vec<Value> = results
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id, "source": t.source, "state": t.state,
+                "title": t.title, "segments": t.segments.len(),
+                "duration_ms": t.duration_ms(),
+            })
+        })
+        .collect();
+    Ok(json!({ "ok": true, "results": list, "count": list.len() }))
+}
+
+/// Transcribe PCM audio bytes and auto-append as a caption segment.
+///
+/// Accepts base64-encoded PCM audio, transcribes via the voice STT factory,
+/// and appends the result to the active transcript.
+pub async fn handle_transcribe_audio(p: Map<String, Value>) -> Result<Value, String> {
+    let transcript_id = p
+        .get("transcript_id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing transcript_id")?;
+    let audio_b64 = p
+        .get("audio_base64")
+        .and_then(|v| v.as_str())
+        .ok_or("missing audio_base64")?;
+    let start_ms = p.get("start_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+    let end_ms = p.get("end_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // Attempt STT transcription via voice factory.
+    let text = transcribe_via_stt(audio_b64).await.unwrap_or_else(|e| {
+        debug!(error = %e, "[live_captions] STT fallback to empty");
+        String::new()
+    });
+
+    if text.is_empty() {
+        return Ok(json!({ "ok": false, "error": "transcription produced empty result" }));
+    }
+
+    let seg = CaptionSegment {
+        text: text.clone(),
+        start_ms,
+        end_ms,
+        speaker: None,
+        confidence: 0.8,
+        is_final: true,
+    };
+
+    match store::append_segment(transcript_id, seg) {
+        Ok(t) => Ok(json!({
+            "ok": true, "text": text,
+            "segment_count": t.segments.len(), "transcript_id": transcript_id,
+        })),
+        Err(e) => Ok(json!({ "ok": false, "error": e })),
+    }
+}
+
+/// Attempt transcription using the voice STT factory.
+async fn transcribe_via_stt(audio_b64: &str) -> Result<String, String> {
+    use crate::openhuman::config::ops::load_config_with_timeout;
+    use crate::openhuman::voice::factory::create_stt_provider;
+
+    let config = load_config_with_timeout()
+        .await
+        .map_err(|e| format!("config load failed: {e}"))?;
+
+    let provider = create_stt_provider("whisper", "", &config)
+        .map_err(|e| format!("STT provider unavailable: {e}"))?;
+
+    let outcome = provider
+        .transcribe(&config, audio_b64, Some("audio/pcm"), None, None)
+        .await
+        .map_err(|e| format!("STT error: {e}"))?;
+
+    Ok(outcome.value.text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

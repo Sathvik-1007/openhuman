@@ -13,10 +13,65 @@ pub async fn handle_triage_message(p: Map<String, Value>) -> Result<Value, Strin
     let sender = p.get("sender").and_then(|v| v.as_str()).unwrap_or("");
     let subject = p.get("subject").and_then(|v| v.as_str()).unwrap_or("");
     let body = p.get("body").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Primary path: LLM-powered triage for intelligent prioritization.
+    if let Some((priority, reason)) = try_llm_triage(sender, subject, body).await {
+        let r = engine::triage_message_with_priority(source, sender, subject, body, priority, &reason);
+        return Ok(
+            json!({"ok":true,"triage_id":r.id,"priority":r.priority,"reason":r.reason,"status":r.status,"source":"llm"}),
+        );
+    }
+
+    // Fallback: keyword-based triage.
     let r = engine::triage_message(source, sender, subject, body);
     Ok(
-        json!({"ok":true,"triage_id":r.id,"priority":r.priority,"reason":r.reason,"status":r.status}),
+        json!({"ok":true,"triage_id":r.id,"priority":r.priority,"reason":r.reason,"status":r.status,"source":"keyword"}),
     )
+}
+
+/// LLM-powered priority classification for incoming messages.
+async fn try_llm_triage(sender: &str, subject: &str, body: &str) -> Option<(TriagePriority, String)> {
+    use crate::openhuman::config::ops::load_config_with_timeout;
+    use crate::openhuman::inference::provider::create_chat_provider;
+
+    let config = load_config_with_timeout().await.ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
+
+    let prompt = format!(
+        "Classify this message's priority and explain why in one sentence.\n\nFrom: {}\nSubject: {}\nBody: {}\n\nRespond with ONLY valid JSON:\n{{\"priority\": \"urgent|high|normal|low\", \"reason\": \"<one sentence>\"}}",
+        sender, subject, &body.chars().take(500).collect::<String>()
+    );
+
+    let system = "You are an email triage assistant. Classify message priority based on urgency, sender importance, and content. Be concise.";
+
+    let text = provider
+        .chat_with_system(Some(system), &prompt, &model, 0.2)
+        .await
+        .ok()?;
+
+    // Parse LLM response.
+    let trimmed = text.trim();
+    let json_str = if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            &trimmed[start..=end]
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let priority = match parsed.get("priority")?.as_str()? {
+        "urgent" => TriagePriority::Urgent,
+        "high" => TriagePriority::High,
+        "normal" => TriagePriority::Normal,
+        _ => TriagePriority::Low,
+    };
+    let reason = parsed.get("reason")?.as_str()?.to_string();
+
+    debug!(priority = ?priority, "[operator_inbox] LLM triage complete");
+    Some((priority, reason))
 }
 
 pub async fn handle_generate_draft(p: Map<String, Value>) -> Result<Value, String> {

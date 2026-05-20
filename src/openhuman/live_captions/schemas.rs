@@ -44,6 +44,11 @@ const DEFS: &[Def] = &[
         schema: schema_list,
         handler: h_list,
     },
+    Def {
+        function: "search_transcripts",
+        schema: schema_search,
+        handler: h_search,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -359,6 +364,43 @@ fn h_get(p: Map<String, Value>) -> ControllerFuture {
 fn h_list(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_list_transcripts(p).await })
 }
+fn h_search(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_search_transcripts(p).await })
+}
+
+fn schema_search() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "live_captions",
+        function: "search_transcripts",
+        description: "Search transcripts by text content.",
+        inputs: vec![FieldSchema {
+            name: "query",
+            ty: TypeSchema::String,
+            comment: "Search query.",
+            required: true,
+        }],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "results",
+                ty: TypeSchema::Array(Box::new(TypeSchema::Json)),
+                comment: "Matching transcripts.",
+                required: true,
+            },
+            FieldSchema {
+                name: "count",
+                ty: TypeSchema::F64,
+                comment: "Result count.",
+                required: true,
+            },
+        ],
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -375,7 +417,7 @@ mod tests {
             .map(|c| c.schema.function)
             .collect();
         assert_eq!(s, h);
-        assert_eq!(s.len(), 6);
+        assert_eq!(s.len(), 7);
     }
 
     #[test]

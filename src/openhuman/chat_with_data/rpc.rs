@@ -107,11 +107,42 @@ async fn try_llm_sql_gen(ds: &DatasetMeta, question: &str) -> Option<String> {
 pub async fn handle_generate_insight(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("dataset_id").and_then(|v| v.as_str()).unwrap_or("");
     match engine::generate_insight(id) {
-        Ok(i) => Ok(
-            json!({"ok":true,"insight_id":i.id,"type":i.insight_type,"title":i.title,"severity":i.severity}),
-        ),
+        Ok(i) => {
+            // Enhance insight with LLM-generated explanation.
+            let explanation = try_llm_explain_insight(&i).await;
+            Ok(json!({
+                "ok": true, "insight_id": i.id, "type": i.insight_type,
+                "title": i.title, "severity": i.severity,
+                "description": i.description,
+                "explanation": explanation.unwrap_or_else(|| i.description.clone()),
+            }))
+        }
         Err(e) => Ok(json!({"ok":false,"error":e})),
     }
+}
+
+/// LLM-powered natural language explanation of detected anomalies.
+async fn try_llm_explain_insight(insight: &Insight) -> Option<String> {
+    use crate::openhuman::config::ops::load_config_with_timeout;
+    use crate::openhuman::inference::provider::create_chat_provider;
+
+    let config = load_config_with_timeout().await.ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
+
+    let prompt = format!(
+        "Explain this data anomaly in plain language. What might have caused it and what should the user do?\n\nDataset: {}\nType: {:?}\nTitle: {}\nDetails: {}\n\nProvide a 2-3 sentence explanation:",
+        insight.dataset, insight.insight_type, insight.title, insight.description
+    );
+
+    let system = "You are a data analyst assistant. Explain anomalies clearly and suggest actionable next steps. Be concise.";
+
+    let text = provider
+        .chat_with_system(Some(system), &prompt, &model, 0.5)
+        .await
+        .ok()?;
+
+    debug!(insight_id = %insight.id, "[chat_with_data] LLM explanation generated");
+    Some(text.trim().to_string())
 }
 
 pub async fn handle_list_datasets(_p: Map<String, Value>) -> Result<Value, String> {
