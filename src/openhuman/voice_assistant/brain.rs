@@ -10,7 +10,7 @@
 //! `[voice-assistant-brain]` — grep-friendly for end-to-end traces.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use serde_json::{json, Value};
 
 use crate::openhuman::config::Config;

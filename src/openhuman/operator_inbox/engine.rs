@@ -134,11 +134,7 @@ fn priority_reason(p: &TriagePriority, subject: &str, _body: &str) -> String {
 }
 
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("oi-{:x}-{:x}", t.as_secs(), t.subsec_nanos())
+    format!("oi-{}", uuid::Uuid::new_v4())
 }
 fn now_epoch() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};

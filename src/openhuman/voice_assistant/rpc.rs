@@ -12,7 +12,7 @@
 //! and `brain.rs` (behavior).
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use log::info;
+use tracing::info;
 use serde_json::{json, Map, Value};
 
 use crate::rpc::RpcOutcome;
@@ -70,7 +70,7 @@ pub async fn handle_push_audio(params: Map<String, Value>) -> Result<Value, Stri
         let session_id = req.session_id.clone();
         tokio::spawn(async move {
             if let Err(err) = brain::run_turn(&session_id).await {
-                log::warn!("{LOG_PREFIX} brain turn failed session={session_id} err={err}");
+                tracing::warn!("{LOG_PREFIX} brain turn failed session={session_id} err={err}");
             }
         });
     }

@@ -49,6 +49,21 @@ const DEFS: &[Def] = &[
         schema: schema_search,
         handler: h_search,
     },
+    Def {
+        function: "transcribe_audio",
+        schema: schema_transcribe,
+        handler: h_transcribe,
+    },
+    Def {
+        function: "pause_transcript",
+        schema: schema_pause,
+        handler: h_pause,
+    },
+    Def {
+        function: "resume_transcript",
+        schema: schema_resume,
+        handler: h_resume,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -367,6 +382,15 @@ fn h_list(p: Map<String, Value>) -> ControllerFuture {
 fn h_search(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_search_transcripts(p).await })
 }
+fn h_transcribe(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_transcribe_audio(p).await })
+}
+fn h_pause(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_pause_transcript(p).await })
+}
+fn h_resume(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_resume_transcript(p).await })
+}
 
 fn schema_search() -> ControllerSchema {
     ControllerSchema {
@@ -402,6 +426,128 @@ fn schema_search() -> ControllerSchema {
     }
 }
 
+fn schema_transcribe() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "live_captions",
+        function: "transcribe_audio",
+        description: "Transcribe PCM audio and append as a caption segment.",
+        inputs: vec![
+            FieldSchema {
+                name: "transcript_id",
+                ty: TypeSchema::String,
+                comment: "Transcript ID.",
+                required: true,
+            },
+            FieldSchema {
+                name: "audio_base64",
+                ty: TypeSchema::String,
+                comment: "Base64-encoded PCM audio.",
+                required: true,
+            },
+            FieldSchema {
+                name: "start_ms",
+                ty: TypeSchema::F64,
+                comment: "Start time ms.",
+                required: false,
+            },
+            FieldSchema {
+                name: "end_ms",
+                ty: TypeSchema::F64,
+                comment: "End time ms.",
+                required: false,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "text",
+                ty: TypeSchema::String,
+                comment: "Transcribed text.",
+                required: true,
+            },
+            FieldSchema {
+                name: "segment_count",
+                ty: TypeSchema::F64,
+                comment: "Total segments.",
+                required: true,
+            },
+        ],
+    }
+}
+
+fn schema_pause() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "live_captions",
+        function: "pause_transcript",
+        description: "Pause an active transcript.",
+        inputs: vec![FieldSchema {
+            name: "transcript_id",
+            ty: TypeSchema::String,
+            comment: "Transcript ID.",
+            required: true,
+        }],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "transcript_id",
+                ty: TypeSchema::String,
+                comment: "ID.",
+                required: true,
+            },
+            FieldSchema {
+                name: "state",
+                ty: TypeSchema::String,
+                comment: "State.",
+                required: true,
+            },
+        ],
+    }
+}
+
+fn schema_resume() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "live_captions",
+        function: "resume_transcript",
+        description: "Resume a paused transcript.",
+        inputs: vec![FieldSchema {
+            name: "transcript_id",
+            ty: TypeSchema::String,
+            comment: "Transcript ID.",
+            required: true,
+        }],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "transcript_id",
+                ty: TypeSchema::String,
+                comment: "ID.",
+                required: true,
+            },
+            FieldSchema {
+                name: "state",
+                ty: TypeSchema::String,
+                comment: "State.",
+                required: true,
+            },
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,7 +563,7 @@ mod tests {
             .map(|c| c.schema.function)
             .collect();
         assert_eq!(s, h);
-        assert_eq!(s.len(), 7);
+        assert_eq!(s.len(), 10);
     }
 
     #[test]

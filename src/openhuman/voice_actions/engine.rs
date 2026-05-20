@@ -135,6 +135,40 @@ pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
     Ok(intent)
 }
 
+/// Store an LLM-extracted intent in the intent store.
+/// Returns the stored intent with a generated ID and proper status.
+pub fn store_llm_intent(
+    utterance: &str,
+    action: &str,
+    confidence: f64,
+    safety: ActionSafety,
+    params: serde_json::Value,
+    _description: &str,
+) -> VoiceIntent {
+    let id = uuid_v4();
+    let status = if safety == ActionSafety::Safe {
+        IntentStatus::Confirmed
+    } else {
+        IntentStatus::Pending
+    };
+    let intent = VoiceIntent {
+        id: id.clone(),
+        utterance: utterance.to_string(),
+        action: action.to_string(),
+        namespace: "llm".to_string(),
+        function: action.to_string(),
+        confidence,
+        safety,
+        status,
+        params,
+        result: None,
+        error: None,
+        created_at: now_epoch(),
+    };
+    INTENTS.lock().unwrap().insert(id, intent.clone());
+    intent
+}
+
 /// Confirm a pending intent (for actions requiring confirmation) and execute it.
 pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
     let mut store = INTENTS.lock().unwrap();
@@ -145,38 +179,8 @@ pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
         return Err(format!("intent is not pending: {:?}", intent.status));
     }
     intent.status = IntentStatus::Confirmed;
-    info!(action_id = %intent_id, "[voice_actions] executing action");
-
-    // Execute the action via controller dispatch pattern.
-    match execute_action(&intent.namespace, &intent.function, &intent.params) {
-        Ok(result) => {
-            intent.status = IntentStatus::Executed;
-            intent.result = Some(result);
-        }
-        Err(e) => {
-            intent.status = IntentStatus::Failed;
-            intent.error = Some(e);
-        }
-    }
+    info!(action_id = %intent_id, "[voice_actions] intent confirmed, awaiting dispatch");
     Ok(intent.clone())
-}
-
-/// Execute an action by dispatching to the controller registry.
-///
-/// Formats the JSON-RPC method name and returns a success result.
-/// Actual dispatch happens at the RPC layer.
-fn execute_action(
-    namespace: &str,
-    function: &str,
-    params: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let method = format!("openhuman.{}_{}", namespace, function);
-    debug!(method = %method, "[voice_actions] dispatching action");
-    Ok(serde_json::json!({
-        "dispatched": true,
-        "method": method,
-        "params": params,
-    }))
 }
 
 /// Reject a pending intent.
@@ -300,7 +304,7 @@ mod tests {
         let i = recognize_intent("send message now").unwrap();
         assert_eq!(i.status, IntentStatus::Pending);
         let i = confirm_intent(&i.id).unwrap();
-        assert_eq!(i.status, IntentStatus::Executed);
+        assert_eq!(i.status, IntentStatus::Confirmed);
     }
 
     #[test]

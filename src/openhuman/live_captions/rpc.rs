@@ -59,6 +59,28 @@ pub async fn handle_complete_transcript(p: Map<String, Value>) -> Result<Value, 
     }
 }
 
+pub async fn handle_pause_transcript(p: Map<String, Value>) -> Result<Value, String> {
+    let tid = p
+        .get("transcript_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match store::pause_transcript(tid) {
+        Ok(t) => Ok(json!({ "ok": true, "transcript_id": t.id, "state": t.state })),
+        Err(e) => Ok(json!({ "ok": false, "error": e })),
+    }
+}
+
+pub async fn handle_resume_transcript(p: Map<String, Value>) -> Result<Value, String> {
+    let tid = p
+        .get("transcript_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match store::resume_transcript(tid) {
+        Ok(t) => Ok(json!({ "ok": true, "transcript_id": t.id, "state": t.state })),
+        Err(e) => Ok(json!({ "ok": false, "error": e })),
+    }
+}
+
 pub async fn handle_summarize_transcript(p: Map<String, Value>) -> Result<Value, String> {
     let tid = p
         .get("transcript_id")

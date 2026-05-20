@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use base64::Engine as _;
-use log::debug;
+use tracing::debug;
 
 use crate::openhuman::meet_agent::ops::{Vad, VadEvent};
 

@@ -9,6 +9,22 @@ pub async fn handle_recognize(p: Map<String, Value>) -> Result<Value, String> {
     // Fast path: high-confidence pattern match for simple, direct commands.
     if let Ok(ref i) = engine::recognize_intent(utterance) {
         if i.confidence >= 0.7 {
+            // Auto-dispatch Safe intents immediately.
+            if i.safety == super::types::ActionSafety::Safe {
+                let method = format!("openhuman.{}_{}", i.namespace, i.function);
+                let params = i.params.as_object().cloned().unwrap_or_default();
+                let dispatch_result =
+                    crate::core::all::try_invoke_registered_rpc(&method, params).await;
+                if let Some(Ok(result)) = dispatch_result {
+                    engine::mark_executed(&i.id, result.clone()).ok();
+                    return Ok(json!({
+                        "ok": true, "intent_id": i.id, "action": i.action,
+                        "namespace": i.namespace, "function": i.function,
+                        "confidence": i.confidence, "safety": i.safety,
+                        "status": "Executed", "result": result, "source": "pattern",
+                    }));
+                }
+            }
             return Ok(json!({
                 "ok": true, "intent_id": i.id, "action": i.action,
                 "namespace": i.namespace, "function": i.function,
@@ -20,11 +36,19 @@ pub async fn handle_recognize(p: Map<String, Value>) -> Result<Value, String> {
 
     // Primary path: LLM-based intent extraction for all other utterances.
     if let Some(extracted) = try_llm_recognize(utterance).await {
+        let intent = engine::store_llm_intent(
+            utterance,
+            &extracted.action,
+            extracted.confidence,
+            extracted.safety,
+            extracted.params,
+            &extracted.description,
+        );
         return Ok(json!({
-            "ok": true, "action": extracted.action,
-            "confidence": extracted.confidence, "safety": extracted.safety,
-            "description": extracted.description, "params": extracted.params,
-            "source": "llm",
+            "ok": true, "intent_id": intent.id, "action": intent.action,
+            "confidence": intent.confidence, "safety": intent.safety,
+            "status": intent.status, "description": extracted.description,
+            "params": intent.params, "source": "llm",
         }));
     }
 
@@ -71,7 +95,30 @@ async fn try_llm_recognize(utterance: &str) -> Option<super::llm_intent::Extract
 pub async fn handle_confirm(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("intent_id").and_then(|v| v.as_str()).unwrap_or("");
     match engine::confirm_intent(id) {
-        Ok(i) => Ok(json!({ "ok": true, "intent_id": i.id, "status": i.status })),
+        Ok(i) => {
+            // Actually dispatch the action through the controller registry.
+            let method = format!("openhuman.{}_{}", i.namespace, i.function);
+            let params = match i.params.as_object() {
+                Some(obj) => obj.clone(),
+                None => Map::new(),
+            };
+            let dispatch_result =
+                crate::core::all::try_invoke_registered_rpc(&method, params).await;
+            match dispatch_result {
+                Some(Ok(result)) => {
+                    engine::mark_executed(id, result.clone()).ok();
+                    Ok(json!({ "ok": true, "intent_id": i.id, "status": "Executed", "result": result }))
+                }
+                Some(Err(e)) => {
+                    engine::mark_failed(id, &e).ok();
+                    Ok(json!({ "ok": true, "intent_id": i.id, "status": "Failed", "error": e }))
+                }
+                None => {
+                    // Method not found in registry — mark executed with dispatch info.
+                    Ok(json!({ "ok": true, "intent_id": i.id, "status": i.status, "dispatched_to": method }))
+                }
+            }
+        }
         Err(e) => Ok(json!({ "ok": false, "error": e })),
     }
 }
