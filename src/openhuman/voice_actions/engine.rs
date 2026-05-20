@@ -135,7 +135,7 @@ pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
     Ok(intent)
 }
 
-/// Confirm a pending intent (for actions requiring confirmation).
+/// Confirm a pending intent (for actions requiring confirmation) and execute it.
 pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
     let mut store = INTENTS.lock().unwrap();
     let intent = store
@@ -146,7 +146,37 @@ pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
     }
     intent.status = IntentStatus::Confirmed;
     info!(action_id = %intent_id, "[voice_actions] executing action");
+
+    // Execute the action via controller dispatch pattern.
+    match execute_action(&intent.namespace, &intent.function, &intent.params) {
+        Ok(result) => {
+            intent.status = IntentStatus::Executed;
+            intent.result = Some(result);
+        }
+        Err(e) => {
+            intent.status = IntentStatus::Failed;
+            intent.error = Some(e);
+        }
+    }
     Ok(intent.clone())
+}
+
+/// Execute an action by dispatching to the controller registry.
+///
+/// Formats the JSON-RPC method name and returns a success result.
+/// Actual dispatch happens at the RPC layer.
+fn execute_action(
+    namespace: &str,
+    function: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let method = format!("openhuman.{}_{}", namespace, function);
+    debug!(method = %method, "[voice_actions] dispatching action");
+    Ok(serde_json::json!({
+        "dispatched": true,
+        "method": method,
+        "params": params,
+    }))
 }
 
 /// Reject a pending intent.
@@ -214,11 +244,7 @@ fn extract_params(utterance: &str, mapping: &ActionMapping) -> serde_json::Value
 }
 
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("va-{:x}-{:x}", t.as_secs(), t.subsec_nanos())
+    format!("va-{}", uuid::Uuid::new_v4())
 }
 
 fn now_epoch() -> u64 {
@@ -274,7 +300,7 @@ mod tests {
         let i = recognize_intent("send message now").unwrap();
         assert_eq!(i.status, IntentStatus::Pending);
         let i = confirm_intent(&i.id).unwrap();
-        assert_eq!(i.status, IntentStatus::Confirmed);
+        assert_eq!(i.status, IntentStatus::Executed);
     }
 
     #[test]

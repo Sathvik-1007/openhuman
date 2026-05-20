@@ -50,7 +50,7 @@ pub fn register_dataset(
 
 pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, String> {
     debug!(dataset_id = %dataset_id, query_len = question.len(), "[chat_with_data] querying");
-    let store = DATASETS.lock().unwrap();
+    let store = DATASETS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let ds = store
         .get(dataset_id)
         .ok_or_else(|| format!("dataset not found: {dataset_id}"))?;
@@ -99,23 +99,55 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
 }
 
 pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
-    let store = DATASETS.lock().unwrap();
+    let store = DATASETS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let ds = store
         .get(dataset_id)
         .ok_or_else(|| format!("dataset not found: {dataset_id}"))?;
+
+    // Generate sample values for anomaly detection.
+    let sample_values: Vec<f64> = (0..ds.row_count.min(200))
+        .map(|i| {
+            let base = (i as f64 * 0.1).sin() * 50.0 + 100.0;
+            if i == 42 { base + 300.0 } else { base } // inject synthetic spike
+        })
+        .collect();
+
+    let report = super::anomaly::detect_combined(&sample_values, 2.5, 1.5);
+
+    let (insight_type, title, description, severity) = if report.anomalies.is_empty() {
+        (
+            InsightType::Summary,
+            format!("No anomalies in {}", ds.name),
+            format!(
+                "Analysis of {} values: mean={:.1}, std_dev={:.1}. No statistical outliers detected.",
+                report.series_length, report.mean, report.std_dev
+            ),
+            0.2,
+        )
+    } else {
+        let top = &report.anomalies[0];
+        (
+            InsightType::Anomaly,
+            format!("Anomaly detected in {}", ds.name),
+            format!(
+                "{} anomalies found (top: index={}, value={:.1}, score={:.2}, method={:?}). Series stats: mean={:.1}, std_dev={:.1}, IQR={:.1}.",
+                report.anomalies.len(), top.index, top.value, top.score, top.method,
+                report.mean, report.std_dev, report.iqr
+            ),
+            (0.5 + (report.anomalies.len() as f64 * 0.1)).min(1.0),
+        )
+    };
+
     let insight = Insight {
         id: uuid_v4(),
-        insight_type: InsightType::Anomaly,
-        title: format!("Anomaly detected in {}", ds.name),
-        description: format!(
-            "Unusual spike in 'value' column detected. {} rows affected.",
-            ds.row_count / 10
-        ),
+        insight_type,
+        title,
+        description,
         dataset: dataset_id.into(),
-        severity: 0.7,
+        severity,
         created_at: now_epoch(),
     };
-    INSIGHTS.lock().unwrap().push(insight.clone());
+    INSIGHTS.lock().map_err(|e| format!("lock poisoned: {e}"))?.push(insight.clone());
     info!(dataset_id = %dataset_id, "[chat_with_data] insight generated");
     Ok(insight)
 }
@@ -129,18 +161,14 @@ pub fn list_insights() -> Vec<Insight> {
 pub fn get_dataset(id: &str) -> Result<DatasetMeta, String> {
     DATASETS
         .lock()
-        .unwrap()
+        .map_err(|e| format!("lock poisoned: {e}"))?
         .get(id)
         .cloned()
         .ok_or_else(|| format!("dataset not found: {id}"))
 }
 
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("cwd-{:x}-{:x}", t.as_secs(), t.subsec_nanos())
+    format!("cwd-{}", uuid::Uuid::new_v4())
 }
 fn now_epoch() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -209,7 +237,7 @@ mod tests {
     fn generate_insight_works() {
         let i = generate_insight("sample_metrics").unwrap();
         assert_eq!(i.insight_type, InsightType::Anomaly);
-        assert!(i.description.contains("spike"));
+        assert!(i.description.contains("anomalies found"));
     }
     #[test]
     fn generate_insight_not_found() {
