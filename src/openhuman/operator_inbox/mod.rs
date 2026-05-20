@@ -5,6 +5,7 @@
 //! Log prefix: `[operator_inbox]`
 
 pub mod engine;
+pub mod parser;
 mod rpc;
 mod schemas;
 pub mod types;
