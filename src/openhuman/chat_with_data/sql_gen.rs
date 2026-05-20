@@ -42,10 +42,16 @@ pub enum SqlGenMethod {
 ///
 /// Returns `Ok(())` if the SQL is syntactically valid, or an error message.
 pub fn validate_sql(sql: &str) -> Result<(), String> {
+    if sql.trim().is_empty() {
+        return Err("SQL validation failed: empty input".into());
+    }
     let dialect = GenericDialect {};
-    Parser::parse_sql(&dialect, sql)
-        .map(|_| ())
-        .map_err(|e| format!("SQL validation failed: {e}"))
+    let stmts =
+        Parser::parse_sql(&dialect, sql).map_err(|e| format!("SQL validation failed: {e}"))?;
+    if stmts.is_empty() {
+        return Err("SQL validation failed: no statements".into());
+    }
+    Ok(())
 }
 
 /// Generate SQL from a natural language question given a table schema.
@@ -60,11 +66,11 @@ pub fn generate_sql_for_question(
 ) -> GeneratedSql {
     let lower = question.to_lowercase();
     let (sql, cols_used, method) =
-        if let Some(result) = try_aggregation_pattern(table_name, columns, &lower) {
+        if let Some(result) = try_group_pattern(table_name, columns, &lower) {
+            result
+        } else if let Some(result) = try_aggregation_pattern(table_name, columns, &lower) {
             result
         } else if let Some(result) = try_filter_pattern(table_name, columns, &lower) {
-            result
-        } else if let Some(result) = try_group_pattern(table_name, columns, &lower) {
             result
         } else {
             // Fallback: SELECT all columns with LIMIT
