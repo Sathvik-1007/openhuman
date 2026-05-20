@@ -1,5 +1,5 @@
 //! RPC handlers for operator_inbox domain.
-use super::{engine, imap_client, types::*};
+use super::{engine, types::*};
 use serde_json::{json, Map, Value};
 use tracing::debug;
 

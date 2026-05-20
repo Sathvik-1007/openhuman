@@ -17,7 +17,7 @@
 //! `[operator-inbox-imap]`
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// IMAP connection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

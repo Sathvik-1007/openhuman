@@ -8,7 +8,7 @@
 //! `[operator-inbox-parser]`
 
 use mail_parser::{MessageParser, MimeHeaders};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Parsed email with structured fields extracted from raw RFC 5322.
 #[derive(Debug, Clone)]
