@@ -108,7 +108,11 @@ pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
     let sample_values: Vec<f64> = (0..ds.row_count.min(200))
         .map(|i| {
             let base = (i as f64 * 0.1).sin() * 50.0 + 100.0;
-            if i == 42 { base + 300.0 } else { base } // inject synthetic spike
+            if i == 42 {
+                base + 300.0
+            } else {
+                base
+            } // inject synthetic spike
         })
         .collect();
 
@@ -147,7 +151,10 @@ pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
         severity,
         created_at: now_epoch(),
     };
-    INSIGHTS.lock().map_err(|e| format!("lock poisoned: {e}"))?.push(insight.clone());
+    INSIGHTS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?
+        .push(insight.clone());
     info!(dataset_id = %dataset_id, "[chat_with_data] insight generated");
     Ok(insight)
 }

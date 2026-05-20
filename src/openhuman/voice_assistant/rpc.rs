@@ -12,8 +12,8 @@
 //! and `brain.rs` (behavior).
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use tracing::info;
 use serde_json::{json, Map, Value};
+use tracing::info;
 
 use crate::rpc::RpcOutcome;
 

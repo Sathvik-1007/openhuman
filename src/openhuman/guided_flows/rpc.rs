@@ -83,7 +83,13 @@ async fn try_llm_personalize(
 
     let answers_text: String = answers
         .iter()
-        .map(|a| format!("- {}: {}", a.step_id, serde_json::to_string(&a.value).unwrap_or_default()))
+        .map(|a| {
+            format!(
+                "- {}: {}",
+                a.step_id,
+                serde_json::to_string(&a.value).unwrap_or_default()
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 

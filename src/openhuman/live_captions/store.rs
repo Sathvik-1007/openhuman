@@ -33,7 +33,9 @@ pub fn start_transcript(
 
 pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Transcript, String> {
     debug!(transcript_id = %transcript_id, text_len = segment.text.len(), "[live_captions] segment appended");
-    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let mut store = TRANSCRIPTS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -46,7 +48,9 @@ pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Tr
 }
 
 pub fn pause_transcript(transcript_id: &str) -> Result<Transcript, String> {
-    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let mut store = TRANSCRIPTS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -59,7 +63,9 @@ pub fn pause_transcript(transcript_id: &str) -> Result<Transcript, String> {
 }
 
 pub fn resume_transcript(transcript_id: &str) -> Result<Transcript, String> {
-    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let mut store = TRANSCRIPTS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -72,7 +78,9 @@ pub fn resume_transcript(transcript_id: &str) -> Result<Transcript, String> {
 }
 
 pub fn complete_transcript(transcript_id: &str) -> Result<Transcript, String> {
-    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let mut store = TRANSCRIPTS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
@@ -84,7 +92,9 @@ pub fn complete_transcript(transcript_id: &str) -> Result<Transcript, String> {
 
 pub fn summarize_transcript(transcript_id: &str) -> Result<Transcript, String> {
     info!(transcript_id = %transcript_id, "[live_captions] summarizing");
-    let mut store = TRANSCRIPTS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let mut store = TRANSCRIPTS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
     let t = store
         .get_mut(transcript_id)
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;

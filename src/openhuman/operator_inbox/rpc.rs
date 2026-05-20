@@ -16,7 +16,8 @@ pub async fn handle_triage_message(p: Map<String, Value>) -> Result<Value, Strin
 
     // Primary path: LLM-powered triage for intelligent prioritization.
     if let Some((priority, reason)) = try_llm_triage(sender, subject, body).await {
-        let r = engine::triage_message_with_priority(source, sender, subject, body, priority, &reason);
+        let r =
+            engine::triage_message_with_priority(source, sender, subject, body, priority, &reason);
         return Ok(
             json!({"ok":true,"triage_id":r.id,"priority":r.priority,"reason":r.reason,"status":r.status,"source":"llm"}),
         );
@@ -30,7 +31,11 @@ pub async fn handle_triage_message(p: Map<String, Value>) -> Result<Value, Strin
 }
 
 /// LLM-powered priority classification for incoming messages.
-async fn try_llm_triage(sender: &str, subject: &str, body: &str) -> Option<(TriagePriority, String)> {
+async fn try_llm_triage(
+    sender: &str,
+    subject: &str,
+    body: &str,
+) -> Option<(TriagePriority, String)> {
     use crate::openhuman::config::ops::load_config_with_timeout;
     use crate::openhuman::inference::provider::create_chat_provider;
 

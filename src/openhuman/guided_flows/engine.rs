@@ -95,7 +95,10 @@ pub fn start_flow(flow_id: &str, session_id: Option<String>) -> Result<FlowSessi
         recommendation: None,
         created_at: now_epoch(),
     };
-    SESSIONS.lock().map_err(|e| format!("lock poisoned: {e}"))?.insert(sid, session.clone());
+    SESSIONS
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?
+        .insert(sid, session.clone());
     info!(flow_id = %flow_id, session_id = %session.session_id, "[guided_flows] flow started");
     Ok(session)
 }
@@ -216,16 +219,46 @@ fn generate_recommendation(_def: &FlowDefinition, answers: &[StepAnswer]) -> Rec
 
     // Build tag mappings from flow choices.
     let tag_mappings: Vec<ChoiceTagMapping> = vec![
-        ChoiceTagMapping { choice: "Personal productivity".into(), tags: HashMap::from([("productivity".into(), 1.0), ("local".into(), 0.5)]) },
-        ChoiceTagMapping { choice: "Team collaboration".into(), tags: HashMap::from([("team".into(), 1.0), ("cloud".into(), 0.7)]) },
-        ChoiceTagMapping { choice: "Development assistant".into(), tags: HashMap::from([("developer".into(), 1.0), ("local".into(), 0.8)]) },
-        ChoiceTagMapping { choice: "Meeting assistant".into(), tags: HashMap::from([("voice".into(), 1.0), ("meetings".into(), 0.9)]) },
-        ChoiceTagMapping { choice: "Keep everything local".into(), tags: HashMap::from([("privacy".into(), 1.0), ("local".into(), 1.0)]) },
-        ChoiceTagMapping { choice: "Allow cloud when needed".into(), tags: HashMap::from([("cloud".into(), 0.5), ("local".into(), 0.5)]) },
-        ChoiceTagMapping { choice: "Prefer cloud for quality".into(), tags: HashMap::from([("cloud".into(), 1.0)]) },
-        ChoiceTagMapping { choice: "Low-end (< 8GB RAM)".into(), tags: HashMap::from([("low_end".into(), 1.0)]) },
-        ChoiceTagMapping { choice: "Mid-range (8-16GB RAM)".into(), tags: HashMap::from([("mid_range".into(), 1.0)]) },
-        ChoiceTagMapping { choice: "High-end (16GB+ RAM, GPU)".into(), tags: HashMap::from([("high_end".into(), 1.0)]) },
+        ChoiceTagMapping {
+            choice: "Personal productivity".into(),
+            tags: HashMap::from([("productivity".into(), 1.0), ("local".into(), 0.5)]),
+        },
+        ChoiceTagMapping {
+            choice: "Team collaboration".into(),
+            tags: HashMap::from([("team".into(), 1.0), ("cloud".into(), 0.7)]),
+        },
+        ChoiceTagMapping {
+            choice: "Development assistant".into(),
+            tags: HashMap::from([("developer".into(), 1.0), ("local".into(), 0.8)]),
+        },
+        ChoiceTagMapping {
+            choice: "Meeting assistant".into(),
+            tags: HashMap::from([("voice".into(), 1.0), ("meetings".into(), 0.9)]),
+        },
+        ChoiceTagMapping {
+            choice: "Keep everything local".into(),
+            tags: HashMap::from([("privacy".into(), 1.0), ("local".into(), 1.0)]),
+        },
+        ChoiceTagMapping {
+            choice: "Allow cloud when needed".into(),
+            tags: HashMap::from([("cloud".into(), 0.5), ("local".into(), 0.5)]),
+        },
+        ChoiceTagMapping {
+            choice: "Prefer cloud for quality".into(),
+            tags: HashMap::from([("cloud".into(), 1.0)]),
+        },
+        ChoiceTagMapping {
+            choice: "Low-end (< 8GB RAM)".into(),
+            tags: HashMap::from([("low_end".into(), 1.0)]),
+        },
+        ChoiceTagMapping {
+            choice: "Mid-range (8-16GB RAM)".into(),
+            tags: HashMap::from([("mid_range".into(), 1.0)]),
+        },
+        ChoiceTagMapping {
+            choice: "High-end (16GB+ RAM, GPU)".into(),
+            tags: HashMap::from([("high_end".into(), 1.0)]),
+        },
     ];
 
     // Accumulate user profile from answers.
@@ -239,42 +272,64 @@ fn generate_recommendation(_def: &FlowDefinition, answers: &[StepAnswer]) -> Rec
     // Build catalog of available configuration options.
     let catalog = vec![
         CatalogItem {
-            id: "voice-first".into(), name: "Voice-First Setup".into(),
+            id: "voice-first".into(),
+            name: "Voice-First Setup".into(),
             description: "Optimized for voice interaction".into(),
             tags: HashMap::from([("voice".into(), 1.0), ("meetings".into(), 0.8)]),
-            exclude_if: vec![], require_tags: vec![], metadata: HashMap::new(),
+            exclude_if: vec![],
+            require_tags: vec![],
+            metadata: HashMap::new(),
         },
         CatalogItem {
-            id: "developer-workflow".into(), name: "Developer Workflow Setup".into(),
+            id: "developer-workflow".into(),
+            name: "Developer Workflow Setup".into(),
             description: "Optimized for development tasks".into(),
             tags: HashMap::from([("developer".into(), 1.0), ("local".into(), 0.7)]),
-            exclude_if: vec![], require_tags: vec![], metadata: HashMap::new(),
+            exclude_if: vec![],
+            require_tags: vec![],
+            metadata: HashMap::new(),
         },
         CatalogItem {
-            id: "team-collab".into(), name: "Team Collaboration Setup".into(),
+            id: "team-collab".into(),
+            name: "Team Collaboration Setup".into(),
             description: "Optimized for team workflows".into(),
             tags: HashMap::from([("team".into(), 1.0), ("cloud".into(), 0.8)]),
-            exclude_if: vec![], require_tags: vec![], metadata: HashMap::new(),
+            exclude_if: vec![],
+            require_tags: vec![],
+            metadata: HashMap::new(),
         },
         CatalogItem {
-            id: "personal-prod".into(), name: "Personal Productivity Setup".into(),
+            id: "personal-prod".into(),
+            name: "Personal Productivity Setup".into(),
             description: "Optimized for personal use".into(),
             tags: HashMap::from([("productivity".into(), 1.0), ("local".into(), 0.6)]),
-            exclude_if: vec![], require_tags: vec![], metadata: HashMap::new(),
+            exclude_if: vec![],
+            require_tags: vec![],
+            metadata: HashMap::new(),
         },
     ];
 
     let ranked = rank_items(&profile, &catalog, 1);
 
     let (title, summary, confidence) = if let Some(top) = ranked.first() {
-        (top.item_name.clone(), top.explanation.clone(), top.normalized_score.max(0.7))
+        (
+            top.item_name.clone(),
+            top.explanation.clone(),
+            top.normalized_score.max(0.7),
+        )
     } else {
-        ("Personal Productivity Setup".into(), "Default recommendation".into(), 0.5)
+        (
+            "Personal Productivity Setup".into(),
+            "Default recommendation".into(),
+            0.5,
+        )
     };
 
     // Generate next actions based on profile tags.
     let mut next_actions = Vec::new();
-    if profile.get("privacy").copied().unwrap_or(0.0) > 0.5 || profile.get("local").copied().unwrap_or(0.0) > 0.5 {
+    if profile.get("privacy").copied().unwrap_or(0.0) > 0.5
+        || profile.get("local").copied().unwrap_or(0.0) > 0.5
+    {
         next_actions.push("Install local Whisper model for STT".into());
         next_actions.push("Install Piper for local TTS".into());
     }

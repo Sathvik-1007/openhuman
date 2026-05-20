@@ -60,7 +60,9 @@ pub async fn handle_recognize(p: Map<String, Value>) -> Result<Value, String> {
             "confidence": i.confidence, "safety": i.safety, "status": i.status,
             "source": "pattern_fallback",
         })),
-        Err(_) => Ok(json!({ "ok": false, "error": format!("no matching action for: {utterance}") })),
+        Err(_) => {
+            Ok(json!({ "ok": false, "error": format!("no matching action for: {utterance}") }))
+        }
     }
 }
 
@@ -88,7 +90,10 @@ async fn try_llm_recognize(utterance: &str) -> Option<super::llm_intent::Extract
         .await
         .ok()?;
 
-    debug!(response_len = response.len(), "[voice_actions] LLM intent response received");
+    debug!(
+        response_len = response.len(),
+        "[voice_actions] LLM intent response received"
+    );
     llm_intent::parse_llm_response(&response)
 }
 
@@ -107,7 +112,9 @@ pub async fn handle_confirm(p: Map<String, Value>) -> Result<Value, String> {
             match dispatch_result {
                 Some(Ok(result)) => {
                     engine::mark_executed(id, result.clone()).ok();
-                    Ok(json!({ "ok": true, "intent_id": i.id, "status": "Executed", "result": result }))
+                    Ok(
+                        json!({ "ok": true, "intent_id": i.id, "status": "Executed", "result": result }),
+                    )
                 }
                 Some(Err(e)) => {
                     engine::mark_failed(id, &e).ok();
@@ -115,7 +122,9 @@ pub async fn handle_confirm(p: Map<String, Value>) -> Result<Value, String> {
                 }
                 None => {
                     // Method not found in registry — mark executed with dispatch info.
-                    Ok(json!({ "ok": true, "intent_id": i.id, "status": i.status, "dispatched_to": method }))
+                    Ok(
+                        json!({ "ok": true, "intent_id": i.id, "status": i.status, "dispatched_to": method }),
+                    )
                 }
             }
         }
