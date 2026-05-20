@@ -2,6 +2,7 @@
 
 use super::{store, types::*};
 use serde_json::{json, Map, Value};
+use tracing::debug;
 
 pub async fn handle_start_transcript(p: Map<String, Value>) -> Result<Value, String> {
     let source = match p
@@ -63,10 +64,97 @@ pub async fn handle_summarize_transcript(p: Map<String, Value>) -> Result<Value,
         .get("transcript_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    // Get the full text for LLM summarization.
+    let transcript = store::get_transcript(tid)?;
+    if transcript.state != TranscriptState::Completed {
+        return Err("transcript must be completed before summarizing".into());
+    }
+
+    let full_text = transcript.full_text();
+
+    // Try LLM summarization first.
+    if let Some(summary) = try_llm_summarize(&full_text, transcript.segments.len()).await {
+        store::set_summary(tid, &summary);
+        return Ok(
+            json!({ "ok": true, "transcript_id": tid, "summary": summary, "source": "llm" }),
+        );
+    }
+
+    // Fallback to extractive summary.
     match store::summarize_transcript(tid) {
-        Ok(t) => Ok(json!({ "ok": true, "transcript_id": t.id, "summary": t.summary })),
+        Ok(t) => Ok(
+            json!({ "ok": true, "transcript_id": t.id, "summary": t.summary, "source": "extractive" }),
+        ),
         Err(e) => Ok(json!({ "ok": false, "error": e })),
     }
+}
+
+/// Attempt LLM-powered transcript summarization.
+async fn try_llm_summarize(full_text: &str, segment_count: usize) -> Option<String> {
+    use crate::api::config::effective_backend_api_url;
+    use crate::api::jwt::get_session_token;
+    use crate::api::BackendOAuthClient;
+    use crate::openhuman::config::ops::load_config_with_timeout;
+    use reqwest::Method;
+
+    if full_text.is_empty() {
+        return None;
+    }
+
+    let config = load_config_with_timeout().await.ok()?;
+    let token = get_session_token(&config)
+        .ok()?
+        .filter(|t| !t.trim().is_empty())?;
+    let api_url = effective_backend_api_url(&config.api_url);
+    let client = BackendOAuthClient::new(&api_url).ok()?;
+
+    // Truncate to ~4000 chars to fit context window.
+    let text_for_llm = if full_text.len() > 4000 {
+        &full_text[..full_text.floor_char_boundary(4000)]
+    } else {
+        full_text
+    };
+
+    let prompt = format!(
+        "Summarize this transcript ({} segments) into concise meeting notes. Include key points, decisions, and action items if any.\n\nTranscript:\n{}",
+        segment_count, text_for_llm
+    );
+
+    let body = json!({
+        "model": "agentic-v1",
+        "temperature": 0.3,
+        "max_tokens": 400,
+        "messages": [
+            {"role": "system", "content": "You are a meeting notes assistant. Produce concise, structured summaries."},
+            {"role": "user", "content": prompt}
+        ],
+    });
+
+    let raw = client
+        .authed_json(
+            &token,
+            Method::POST,
+            "/openai/v1/chat/completions",
+            Some(body),
+        )
+        .await
+        .ok()?;
+
+    let text = raw
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?
+        .as_str()?
+        .to_string();
+
+    debug!(
+        text_len = text.len(),
+        "[live_captions] LLM summary generated"
+    );
+    Some(text)
 }
 
 pub async fn handle_get_transcript(p: Map<String, Value>) -> Result<Value, String> {
@@ -152,6 +240,7 @@ mod tests {
         p.insert("transcript_id".into(), Value::String("rpc-lc-3".into()));
         let r = handle_summarize_transcript(p).await.unwrap();
         assert_eq!(r["ok"], true);
-        assert!(r["summary"].as_str().unwrap().contains("1 segments"));
+        // Summary comes from either LLM or extractive fallback.
+        assert!(r["summary"].as_str().unwrap().len() > 5);
     }
 }

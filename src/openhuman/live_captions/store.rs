@@ -120,6 +120,14 @@ pub fn list_transcripts() -> Vec<Transcript> {
     TRANSCRIPTS.lock().unwrap().values().cloned().collect()
 }
 
+/// Set summary directly (used when LLM generates the summary).
+pub fn set_summary(transcript_id: &str, summary: &str) {
+    if let Some(t) = TRANSCRIPTS.lock().unwrap().get_mut(transcript_id) {
+        t.summary = Some(summary.to_string());
+        t.updated_at = now_epoch();
+    }
+}
+
 fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now()

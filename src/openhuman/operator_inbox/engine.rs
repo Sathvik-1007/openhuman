@@ -78,6 +78,14 @@ pub fn archive_triage(triage_id: &str) -> Result<TriageRecord, String> {
     Ok(rec.clone())
 }
 
+/// Store LLM-generated draft content on a triage record.
+pub fn set_draft_content(triage_id: &str, content: &str) {
+    if let Some(rec) = RECORDS.lock().unwrap().get_mut(triage_id) {
+        rec.proposed_reply = Some(content.to_string());
+        rec.status = TriageStatus::Drafted;
+    }
+}
+
 pub fn get_triage(triage_id: &str) -> Result<TriageRecord, String> {
     RECORDS
         .lock()
