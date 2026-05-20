@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::{debug, info};
 
 use super::types::*;
 
@@ -26,11 +27,12 @@ pub fn start_transcript(
         updated_at: now,
     };
     TRANSCRIPTS.lock().unwrap().insert(tid, t.clone());
-    tracing::info!(transcript_id = %t.id, "[live_captions] transcript started");
+    info!(transcript_id = %t.id, "[live_captions] transcript started");
     t
 }
 
 pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Transcript, String> {
+    debug!(transcript_id = %transcript_id, text_len = segment.text.len(), "[live_captions] segment appended");
     let mut store = TRANSCRIPTS.lock().unwrap();
     let t = store
         .get_mut(transcript_id)
@@ -76,15 +78,12 @@ pub fn complete_transcript(transcript_id: &str) -> Result<Transcript, String> {
         .ok_or_else(|| format!("transcript not found: {transcript_id}"))?;
     t.state = TranscriptState::Completed;
     t.updated_at = now_epoch();
-    tracing::info!(
-        transcript_id,
-        segments = t.segments.len(),
-        "[live_captions] transcript completed"
-    );
+    info!(transcript_id = %transcript_id, "[live_captions] transcript completed");
     Ok(t.clone())
 }
 
 pub fn summarize_transcript(transcript_id: &str) -> Result<Transcript, String> {
+    info!(transcript_id = %transcript_id, "[live_captions] summarizing");
     let mut store = TRANSCRIPTS.lock().unwrap();
     let t = store
         .get_mut(transcript_id)

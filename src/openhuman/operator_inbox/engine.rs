@@ -3,6 +3,7 @@
 use super::types::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::{debug, info};
 
 static RECORDS: std::sync::LazyLock<Mutex<HashMap<String, TriageRecord>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -30,11 +31,12 @@ pub fn triage_message(
         created_at: now_epoch(),
     };
     RECORDS.lock().unwrap().insert(id, rec.clone());
-    tracing::info!(triage_id = %rec.id, priority = ?rec.priority, "[operator_inbox] message triaged");
+    info!(triage_id = %rec.id, priority = ?rec.priority, "[operator_inbox] message triaged");
     rec
 }
 
 pub fn generate_draft(triage_id: &str, tone: ReplyTone) -> Result<DraftReply, String> {
+    debug!(triage_id = %triage_id, tone = ?tone, "[operator_inbox] generating draft");
     let mut store = RECORDS.lock().unwrap();
     let rec = store
         .get_mut(triage_id)
@@ -62,11 +64,7 @@ pub fn schedule_followup(triage_id: &str, follow_up_at: u64) -> Result<TriageRec
         .get_mut(triage_id)
         .ok_or_else(|| format!("triage not found: {triage_id}"))?;
     rec.follow_up_at = Some(follow_up_at);
-    tracing::info!(
-        triage_id,
-        follow_up_at,
-        "[operator_inbox] followup scheduled"
-    );
+    info!(triage_id = %triage_id, "[operator_inbox] follow-up scheduled");
     Ok(rec.clone())
 }
 
@@ -76,6 +74,7 @@ pub fn archive_triage(triage_id: &str) -> Result<TriageRecord, String> {
         .get_mut(triage_id)
         .ok_or_else(|| format!("triage not found: {triage_id}"))?;
     rec.status = TriageStatus::Archived;
+    debug!(triage_id = %triage_id, "[operator_inbox] archived");
     Ok(rec.clone())
 }
 

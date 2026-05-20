@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::{debug, info};
 
 use crate::openhuman::guided_flows::types::*;
 
@@ -74,7 +75,9 @@ fn builtin_onboarding_flow() -> (String, FlowDefinition) {
 }
 
 pub fn list_flows() -> Vec<FlowDefinition> {
-    FLOWS.lock().unwrap().values().cloned().collect()
+    let flows: Vec<FlowDefinition> = FLOWS.lock().unwrap().values().cloned().collect();
+    debug!(count = flows.len(), "[guided_flows] listing flows");
+    flows
 }
 
 pub fn start_flow(flow_id: &str, session_id: Option<String>) -> Result<FlowSession, String> {
@@ -93,7 +96,7 @@ pub fn start_flow(flow_id: &str, session_id: Option<String>) -> Result<FlowSessi
         created_at: now_epoch(),
     };
     SESSIONS.lock().unwrap().insert(sid, session.clone());
-    tracing::info!(flow_id, session_id = %session.session_id, "[guided_flows] session started");
+    info!(flow_id = %flow_id, session_id = %session.session_id, "[guided_flows] flow started");
     Ok(session)
 }
 
@@ -102,6 +105,7 @@ pub fn submit_answer(
     step_id: &str,
     value: serde_json::Value,
 ) -> Result<FlowSession, String> {
+    debug!(session_id = %session_id, step_id = %step_id, "[guided_flows] answer submitted");
     // Lock ordering: FLOWS first, then SESSIONS (matches start_flow).
     let flows = FLOWS.lock().unwrap();
 
@@ -148,13 +152,14 @@ pub fn submit_answer(
         None => {
             session.state = FlowSessionState::Completed;
             session.recommendation = Some(generate_recommendation(def, &session.answers));
-            tracing::info!(session_id, "[guided_flows] flow completed");
+            info!(session_id = %session_id, "[guided_flows] flow completed");
         }
     }
     Ok(session.clone())
 }
 
 pub fn get_session(session_id: &str) -> Result<FlowSession, String> {
+    debug!(session_id = %session_id, "[guided_flows] state queried");
     SESSIONS
         .lock()
         .unwrap()

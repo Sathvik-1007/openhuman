@@ -3,6 +3,7 @@
 use super::types::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::{debug, info};
 
 static DATASETS: std::sync::LazyLock<Mutex<HashMap<String, DatasetMeta>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::from([builtin_sample()])));
@@ -43,11 +44,12 @@ pub fn register_dataset(
         registered_at: now_epoch(),
     };
     DATASETS.lock().unwrap().insert(id, d.clone());
-    tracing::info!(dataset_id = %d.id, "[chat_with_data] dataset registered");
+    info!(dataset_id = %d.id, name = %d.name, "[chat_with_data] dataset registered");
     d
 }
 
 pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, String> {
+    debug!(dataset_id = %dataset_id, query_len = question.len(), "[chat_with_data] querying");
     let store = DATASETS.lock().unwrap();
     let ds = store
         .get(dataset_id)
@@ -91,7 +93,7 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
         confidence: 0.85,
         caveats: vec!["Results based on mock analysis engine".into()],
     };
-    tracing::info!(dataset_id, "[chat_with_data] query answered");
+    info!(dataset_id = %dataset_id, "[chat_with_data] query complete");
     Ok(result)
 }
 
@@ -113,7 +115,7 @@ pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
         created_at: now_epoch(),
     };
     INSIGHTS.lock().unwrap().push(insight.clone());
-    tracing::info!(insight_id = %insight.id, "[chat_with_data] insight generated");
+    info!(dataset_id = %dataset_id, "[chat_with_data] insight generated");
     Ok(insight)
 }
 

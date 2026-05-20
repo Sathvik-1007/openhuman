@@ -7841,3 +7841,407 @@ async fn port_conflict_recovery_core_starts_on_fallback_port_e2e() {
     // Release the listener so the port is not held across tests.
     drop(after_drop.listener);
 }
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn guided_flows_lifecycle_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 1. List flows — should include the builtin onboarding flow.
+    let list = post_json_rpc(&rpc_base, 200, "openhuman.guided_flows_list_flows", json!({})).await;
+    let list_r = assert_no_jsonrpc_error(&list, "guided_flows_list_flows");
+    let result = list_r.get("result").unwrap_or(list_r);
+    let flows = result.get("flows").and_then(Value::as_array).expect("flows array");
+    assert!(!flows.is_empty(), "should have at least one flow: {result}");
+
+    // 2. Start the onboarding flow.
+    let start = post_json_rpc(
+        &rpc_base,
+        201,
+        "openhuman.guided_flows_start_flow",
+        json!({ "flow_id": "onboarding_setup" }),
+    )
+    .await;
+    let start_r = assert_no_jsonrpc_error(&start, "guided_flows_start_flow");
+    let start_body = start_r.get("result").unwrap_or(start_r);
+    assert_eq!(start_body.get("ok"), Some(&json!(true)), "start should succeed: {start_body}");
+    let session_id = start_body.get("session_id").and_then(Value::as_str).expect("session_id");
+
+    // 3. Submit answer to first step.
+    let answer = post_json_rpc(
+        &rpc_base,
+        202,
+        "openhuman.guided_flows_submit_answer",
+        json!({
+            "session_id": session_id,
+            "step_id": "use_case",
+            "value": "Personal productivity"
+        }),
+    )
+    .await;
+    let answer_r = assert_no_jsonrpc_error(&answer, "guided_flows_submit_answer");
+    let answer_body = answer_r.get("result").unwrap_or(answer_r);
+    assert_eq!(answer_body.get("ok"), Some(&json!(true)), "answer should succeed: {answer_body}");
+
+    // 4. Get session state.
+    let state = post_json_rpc(
+        &rpc_base,
+        203,
+        "openhuman.guided_flows_get_session",
+        json!({ "session_id": session_id }),
+    )
+    .await;
+    let state_r = assert_no_jsonrpc_error(&state, "guided_flows_get_session");
+    let state_body = state_r.get("result").unwrap_or(state_r);
+    assert_eq!(state_body.get("ok"), Some(&json!(true)), "get_session should succeed: {state_body}");
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Voice assistant — session start/stop over RPC
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn voice_assistant_session_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 1. Start session.
+    let start = post_json_rpc(
+        &rpc_base,
+        300,
+        "openhuman.voice_assistant_start_session",
+        json!({ "stt_provider": "whisper", "tts_provider": "piper" }),
+    )
+    .await;
+    let start_r = assert_no_jsonrpc_error(&start, "voice_assistant_start_session");
+    let start_body = start_r.get("result").unwrap_or(start_r);
+    assert_eq!(start_body.get("ok"), Some(&json!(true)), "start should succeed: {start_body}");
+    let session_id = start_body.get("session_id").and_then(Value::as_str).expect("session_id");
+
+    // 2. Get status.
+    let status = post_json_rpc(
+        &rpc_base,
+        301,
+        "openhuman.voice_assistant_get_status",
+        json!({ "session_id": session_id }),
+    )
+    .await;
+    let status_r = assert_no_jsonrpc_error(&status, "voice_assistant_get_status");
+    let status_body = status_r.get("result").unwrap_or(status_r);
+    assert_eq!(status_body.get("ok"), Some(&json!(true)), "status should succeed: {status_body}");
+
+    // 3. Stop session.
+    let stop = post_json_rpc(
+        &rpc_base,
+        302,
+        "openhuman.voice_assistant_stop_session",
+        json!({ "session_id": session_id }),
+    )
+    .await;
+    let stop_r = assert_no_jsonrpc_error(&stop, "voice_assistant_stop_session");
+    let stop_body = stop_r.get("result").unwrap_or(stop_r);
+    assert_eq!(stop_body.get("ok"), Some(&json!(true)), "stop should succeed: {stop_body}");
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Live captions — transcript lifecycle over RPC
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn live_captions_lifecycle_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 1. Start transcript.
+    let start = post_json_rpc(
+        &rpc_base,
+        400,
+        "openhuman.live_captions_start_transcript",
+        json!({ "source": "microphone" }),
+    )
+    .await;
+    let start_r = assert_no_jsonrpc_error(&start, "live_captions_start_transcript");
+    let start_body = start_r.get("result").unwrap_or(start_r);
+    assert_eq!(start_body.get("ok"), Some(&json!(true)), "start should succeed: {start_body}");
+    let transcript_id = start_body.get("transcript_id").and_then(Value::as_str).expect("transcript_id");
+
+    // 2. Append segment.
+    let append = post_json_rpc(
+        &rpc_base,
+        401,
+        "openhuman.live_captions_append_segment",
+        json!({
+            "transcript_id": transcript_id,
+            "text": "Hello world",
+            "start_ms": 0,
+            "end_ms": 1000
+        }),
+    )
+    .await;
+    let append_r = assert_no_jsonrpc_error(&append, "live_captions_append_segment");
+    let append_body = append_r.get("result").unwrap_or(append_r);
+    assert_eq!(append_body.get("ok"), Some(&json!(true)), "append should succeed: {append_body}");
+
+    // 3. Complete transcript.
+    let complete = post_json_rpc(
+        &rpc_base,
+        402,
+        "openhuman.live_captions_complete_transcript",
+        json!({ "transcript_id": transcript_id }),
+    )
+    .await;
+    let complete_r = assert_no_jsonrpc_error(&complete, "live_captions_complete_transcript");
+    let complete_body = complete_r.get("result").unwrap_or(complete_r);
+    assert_eq!(complete_body.get("ok"), Some(&json!(true)), "complete should succeed: {complete_body}");
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Voice actions — register + recognize over RPC
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn voice_actions_lifecycle_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 1. Register an action.
+    let reg = post_json_rpc(
+        &rpc_base,
+        500,
+        "openhuman.voice_actions_register_action",
+        json!({
+            "id": "open_settings",
+            "trigger_phrases": ["open settings", "show settings"],
+            "description": "Opens the settings page",
+            "safety_level": "safe"
+        }),
+    )
+    .await;
+    let reg_r = assert_no_jsonrpc_error(&reg, "voice_actions_register_action");
+    let reg_body = reg_r.get("result").unwrap_or(reg_r);
+    assert_eq!(reg_body.get("ok"), Some(&json!(true)), "register should succeed: {reg_body}");
+
+    // 2. Recognize intent.
+    let rec = post_json_rpc(
+        &rpc_base,
+        501,
+        "openhuman.voice_actions_recognize_intent",
+        json!({ "utterance": "open settings please" }),
+    )
+    .await;
+    let rec_r = assert_no_jsonrpc_error(&rec, "voice_actions_recognize_intent");
+    let rec_body = rec_r.get("result").unwrap_or(rec_r);
+    assert_eq!(rec_body.get("ok"), Some(&json!(true)), "recognize should succeed: {rec_body}");
+
+    // 3. List actions.
+    let list = post_json_rpc(
+        &rpc_base,
+        502,
+        "openhuman.voice_actions_list_actions",
+        json!({}),
+    )
+    .await;
+    let list_r = assert_no_jsonrpc_error(&list, "voice_actions_list_actions");
+    let list_body = list_r.get("result").unwrap_or(list_r);
+    assert_eq!(list_body.get("ok"), Some(&json!(true)), "list should succeed: {list_body}");
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Operator inbox — triage + draft over RPC
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn operator_inbox_lifecycle_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 1. Triage a message.
+    let triage = post_json_rpc(
+        &rpc_base,
+        600,
+        "openhuman.operator_inbox_triage_message",
+        json!({
+            "source": "email",
+            "sender": "alice@example.com",
+            "subject": "Urgent: Server down",
+            "body": "Production server is unresponsive since 10am."
+        }),
+    )
+    .await;
+    let triage_r = assert_no_jsonrpc_error(&triage, "operator_inbox_triage_message");
+    let triage_body = triage_r.get("result").unwrap_or(triage_r);
+    assert_eq!(triage_body.get("ok"), Some(&json!(true)), "triage should succeed: {triage_body}");
+    let triage_id = triage_body.get("triage_id").and_then(Value::as_str).expect("triage_id");
+
+    // 2. Generate draft reply.
+    let draft = post_json_rpc(
+        &rpc_base,
+        601,
+        "openhuman.operator_inbox_generate_draft",
+        json!({ "triage_id": triage_id, "tone": "professional" }),
+    )
+    .await;
+    let draft_r = assert_no_jsonrpc_error(&draft, "operator_inbox_generate_draft");
+    let draft_body = draft_r.get("result").unwrap_or(draft_r);
+    assert_eq!(draft_body.get("ok"), Some(&json!(true)), "draft should succeed: {draft_body}");
+
+    mock_join.abort();
+    rpc_join.abort();
+}
+
+// ---------------------------------------------------------------------------
+// Chat with data — dataset + query over RPC
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn chat_with_data_lifecycle_over_rpc() {
+    let _env_lock = json_rpc_e2e_env_lock();
+    let tmp = tempdir().expect("tempdir");
+    let home = tmp.path();
+    let openhuman_home = home.join(".openhuman");
+
+    let _home_guard = EnvVarGuard::set_to_path("HOME", home);
+    let _workspace_guard = EnvVarGuard::unset("OPENHUMAN_WORKSPACE");
+    let _backend_url_guard = EnvVarGuard::unset("BACKEND_URL");
+    let _vite_backend_guard = EnvVarGuard::unset("VITE_BACKEND_URL");
+
+    let (mock_addr, mock_join) = serve_on_ephemeral(mock_upstream_router()).await;
+    let mock_origin = format!("http://{}", mock_addr);
+    write_min_config(&openhuman_home, &mock_origin);
+
+    let (rpc_addr, rpc_join) = serve_on_ephemeral(build_core_http_router(false)).await;
+    let rpc_base = format!("http://{}", rpc_addr);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 1. Register a dataset.
+    let reg = post_json_rpc(
+        &rpc_base,
+        700,
+        "openhuman.chat_with_data_register_dataset",
+        json!({
+            "name": "sales_q4",
+            "source_type": "csv",
+            "connection_uri": "/tmp/sales.csv"
+        }),
+    )
+    .await;
+    let reg_r = assert_no_jsonrpc_error(&reg, "chat_with_data_register_dataset");
+    let reg_body = reg_r.get("result").unwrap_or(reg_r);
+    assert_eq!(reg_body.get("ok"), Some(&json!(true)), "register should succeed: {reg_body}");
+    let dataset_id = reg_body.get("dataset_id").and_then(Value::as_str).expect("dataset_id");
+
+    // 2. Query the dataset.
+    let query = post_json_rpc(
+        &rpc_base,
+        701,
+        "openhuman.chat_with_data_query",
+        json!({ "dataset_id": dataset_id, "question": "What were total sales?" }),
+    )
+    .await;
+    let query_r = assert_no_jsonrpc_error(&query, "chat_with_data_query");
+    let query_body = query_r.get("result").unwrap_or(query_r);
+    assert_eq!(query_body.get("ok"), Some(&json!(true)), "query should succeed: {query_body}");
+
+    // 3. List datasets.
+    let list = post_json_rpc(
+        &rpc_base,
+        702,
+        "openhuman.chat_with_data_list_datasets",
+        json!({}),
+    )
+    .await;
+    let list_r = assert_no_jsonrpc_error(&list, "chat_with_data_list_datasets");
+    let list_body = list_r.get("result").unwrap_or(list_r);
+    assert_eq!(list_body.get("ok"), Some(&json!(true)), "list should succeed: {list_body}");
+
+    mock_join.abort();
+    rpc_join.abort();
+}
