@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::{debug, info, warn};
 
 use super::types::*;
 
@@ -86,6 +87,10 @@ static MAPPINGS: std::sync::LazyLock<Vec<ActionMapping>> = std::sync::LazyLock::
 
 /// Recognize intent from an utterance using keyword matching.
 pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
+    debug!(
+        utterance_len = utterance.len(),
+        "[voice_actions] recognizing intent"
+    );
     let lower = utterance.to_lowercase();
     let mut best: Option<(&ActionMapping, f64)> = None;
 
@@ -123,7 +128,10 @@ pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
     };
 
     INTENTS.lock().unwrap().insert(id, intent.clone());
-    tracing::info!(intent_id = %intent.id, action = %intent.action, "[voice_actions] intent recognized");
+    if intent.status == IntentStatus::Pending {
+        warn!(action_id = %intent.id, "[voice_actions] confirmation required");
+    }
+    info!(action_id = %intent.id, confidence = %intent.confidence, "[voice_actions] intent matched");
     Ok(intent)
 }
 
@@ -137,7 +145,7 @@ pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
         return Err(format!("intent is not pending: {:?}", intent.status));
     }
     intent.status = IntentStatus::Confirmed;
-    tracing::info!(intent_id, "[voice_actions] intent confirmed");
+    info!(action_id = %intent_id, "[voice_actions] executing action");
     Ok(intent.clone())
 }
 

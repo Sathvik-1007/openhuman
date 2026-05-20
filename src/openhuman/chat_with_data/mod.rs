@@ -8,6 +8,7 @@
 pub mod engine;
 mod rpc;
 mod schemas;
+pub mod sql_gen;
 pub mod types;
 
 pub use schemas::{

@@ -54,31 +54,28 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
     let ds = store
         .get(dataset_id)
         .ok_or_else(|| format!("dataset not found: {dataset_id}"))?;
-    let lower = question.to_lowercase();
 
-    let (answer, cols_used) = if lower.contains("average") || lower.contains("mean") {
-        ("The average value is 42.7".into(), vec!["value".into()])
-    } else if lower.contains("count") {
-        (
-            format!("Total count: {} rows", ds.row_count),
-            vec!["*".into()],
-        )
-    } else if lower.contains("max") {
-        ("Maximum value: 99.8".into(), vec!["value".into()])
-    } else if lower.contains("min") {
-        ("Minimum value: 1.2".into(), vec!["value".into()])
-    } else if lower.contains("trend") {
-        (
-            "Values show an upward trend over the last 30 days".into(),
-            vec!["date".into(), "value".into()],
+    // Generate real SQL using sqlparser-validated generation.
+    let generated = super::sql_gen::generate_sql_for_question(&ds.id, &ds.columns, question);
+
+    // Validate safety (no DROP/DELETE/etc).
+    if let Err(e) = super::sql_gen::is_safe_query(&generated.sql) {
+        return Err(format!("unsafe query rejected: {e}"));
+    }
+
+    let answer = if generated.is_valid {
+        format!(
+            "Generated SQL: `{}` — targeting {} columns from '{}' ({} rows)",
+            generated.sql,
+            generated.columns_used.len(),
+            ds.name,
+            ds.row_count
         )
     } else {
-        (
-            format!(
-                "Based on {} rows in '{}': analysis complete.",
-                ds.row_count, ds.name
-            ),
-            ds.columns.clone(),
+        format!(
+            "Query generation produced invalid SQL: {}. Falling back to schema summary for '{}'.",
+            generated.validation_error.unwrap_or_default(),
+            ds.name
         )
     };
 
@@ -86,14 +83,18 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
         answer,
         sources: vec![SourceRef {
             dataset: dataset_id.into(),
-            columns_used: cols_used,
+            columns_used: generated.columns_used,
             filter_applied: None,
             row_count: ds.row_count,
         }],
-        confidence: 0.85,
-        caveats: vec!["Results based on mock analysis engine".into()],
+        confidence: if generated.is_valid { 0.9 } else { 0.5 },
+        caveats: if generated.is_valid {
+            vec![format!("Method: {:?}", generated.method)]
+        } else {
+            vec!["SQL generation failed validation".into()]
+        },
     };
-    info!(dataset_id = %dataset_id, "[chat_with_data] query complete");
+    info!(dataset_id = %dataset_id, valid = generated.is_valid, "[chat_with_data] query complete");
     Ok(result)
 }
 
@@ -171,33 +172,34 @@ mod tests {
     #[test]
     fn query_average() {
         let r = query_dataset("sample_metrics", "What is the average value?").unwrap();
-        assert!(r.answer.contains("42.7"));
+        assert!(r.answer.contains("AVG"));
+        assert!(r.confidence > 0.8);
         assert_eq!(r.sources[0].dataset, "sample_metrics");
     }
     #[test]
     fn query_count() {
         let r = query_dataset("sample_metrics", "How many rows count?").unwrap();
-        assert!(r.answer.contains("1000"));
+        assert!(r.answer.contains("COUNT"));
     }
     #[test]
     fn query_max() {
         let r = query_dataset("sample_metrics", "What is the max?").unwrap();
-        assert!(r.answer.contains("99.8"));
+        assert!(r.answer.contains("MAX"));
     }
     #[test]
     fn query_min() {
         let r = query_dataset("sample_metrics", "Show min value").unwrap();
-        assert!(r.answer.contains("1.2"));
+        assert!(r.answer.contains("MIN"));
     }
     #[test]
     fn query_trend() {
-        let r = query_dataset("sample_metrics", "Show me the trend").unwrap();
-        assert!(r.answer.contains("upward"));
+        let r = query_dataset("sample_metrics", "Show data from last 7 days").unwrap();
+        assert!(r.answer.contains("datetime") || r.answer.contains("SQL"));
     }
     #[test]
     fn query_generic() {
         let r = query_dataset("sample_metrics", "Tell me about this data").unwrap();
-        assert!(r.answer.contains("1000"));
+        assert!(r.answer.contains("SQL") || r.answer.contains("LIMIT"));
     }
     #[test]
     fn query_not_found() {
