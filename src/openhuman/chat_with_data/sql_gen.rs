@@ -296,8 +296,14 @@ fn extract_time_filter(question: &str) -> Option<u32> {
 /// Check if a SQL query contains dangerous operations.
 pub fn is_safe_query(sql: &str) -> Result<(), String> {
     let upper = sql.to_uppercase();
+
+    // Reject multiple statements (semicolons).
+    if sql.contains(';') {
+        return Err("Query contains multiple statements (semicolons not allowed)".into());
+    }
+
     let dangerous = [
-        "DROP", "DELETE", "TRUNCATE", "ALTER", "INSERT", "UPDATE", "CREATE",
+        "DROP", "DELETE", "TRUNCATE", "ALTER", "INSERT", "UPDATE", "CREATE", "EXEC", "EXECUTE",
     ];
     for keyword in &dangerous {
         // Check it's a standalone keyword, not part of a column name.
@@ -305,6 +311,12 @@ pub fn is_safe_query(sql: &str) -> Result<(), String> {
             return Err(format!("Query contains dangerous operation: {keyword}"));
         }
     }
+
+    // Reject UNION-based injection attempts.
+    if upper.split_whitespace().any(|w| w == "UNION") {
+        return Err("Query contains UNION (not allowed for safety)".into());
+    }
+
     Ok(())
 }
 
@@ -390,6 +402,17 @@ mod tests {
         assert!(is_safe_query("SELECT * FROM users").is_ok());
         // Column named "drop_count" should NOT trigger.
         assert!(is_safe_query("SELECT drop_count FROM metrics").is_ok());
+    }
+
+    #[test]
+    fn safety_check_blocks_semicolons() {
+        assert!(is_safe_query("SELECT 1; DROP TABLE users").is_err());
+        assert!(is_safe_query("SELECT * FROM t;").is_err());
+    }
+
+    #[test]
+    fn safety_check_blocks_union() {
+        assert!(is_safe_query("SELECT * FROM users UNION SELECT * FROM secrets").is_err());
     }
 
     #[test]

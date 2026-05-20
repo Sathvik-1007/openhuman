@@ -171,6 +171,38 @@ pub async fn handle_get_dataset(p: Map<String, Value>) -> Result<Value, String> 
     }
 }
 
+pub async fn handle_ingest_rows(p: Map<String, Value>) -> Result<Value, String> {
+    let id = p.get("dataset_id").and_then(|v| v.as_str()).unwrap_or("");
+    let rows_val = p.get("rows").and_then(|v| v.as_array());
+    let rows: Vec<std::collections::HashMap<String, f64>> = rows_val
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|row| {
+                    row.as_object().map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
+                            .collect()
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let count = rows.len();
+    engine::ingest_rows(id, rows);
+    Ok(json!({"ok": true, "ingested": count}))
+}
+
+pub async fn handle_scan_anomalies(_p: Map<String, Value>) -> Result<Value, String> {
+    let insights = engine::scan_all_datasets_for_anomalies();
+    let items: Vec<Value> = insights
+        .iter()
+        .map(
+            |i| json!({"id": i.id, "title": i.title, "dataset": i.dataset, "severity": i.severity}),
+        )
+        .collect();
+    Ok(json!({"ok": true, "insights_found": items.len(), "insights": items}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

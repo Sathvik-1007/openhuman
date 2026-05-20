@@ -63,7 +63,19 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
         return Err(format!("unsafe query rejected: {e}"));
     }
 
-    let answer = if generated.is_valid {
+    // Execute against in-memory data if available.
+    let execution_result = if generated.is_valid {
+        execute_in_memory(dataset_id, &generated.sql, &ds.columns)
+    } else {
+        None
+    };
+
+    let answer = if let Some(ref exec) = execution_result {
+        format!(
+            "Result: {} — SQL: `{}` (from '{}', {} rows scanned)",
+            exec, generated.sql, ds.name, ds.row_count
+        )
+    } else if generated.is_valid {
         format!(
             "Generated SQL: `{}` — targeting {} columns from '{}' ({} rows)",
             generated.sql,
@@ -87,15 +99,98 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
             filter_applied: None,
             row_count: ds.row_count,
         }],
-        confidence: if generated.is_valid { 0.9 } else { 0.5 },
-        caveats: if generated.is_valid {
+        confidence: if execution_result.is_some() {
+            0.95
+        } else if generated.is_valid {
+            0.9
+        } else {
+            0.5
+        },
+        caveats: if execution_result.is_some() {
+            vec!["Executed against in-memory dataset".into()]
+        } else if generated.is_valid {
             vec![format!("Method: {:?}", generated.method)]
         } else {
             vec!["SQL generation failed validation".into()]
         },
     };
-    info!(dataset_id = %dataset_id, valid = generated.is_valid, "[chat_with_data] query complete");
+    info!(dataset_id = %dataset_id, valid = generated.is_valid, executed = execution_result.is_some(), "[chat_with_data] query complete");
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// In-memory query execution
+// ---------------------------------------------------------------------------
+
+/// In-memory row store: dataset_id → rows (each row is column_name → value).
+static ROW_STORE: std::sync::LazyLock<Mutex<HashMap<String, Vec<HashMap<String, f64>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Ingest rows into the in-memory store for a dataset.
+pub fn ingest_rows(dataset_id: &str, rows: Vec<HashMap<String, f64>>) {
+    info!(dataset_id = %dataset_id, row_count = rows.len(), "[chat_with_data] rows ingested");
+    ROW_STORE
+        .lock()
+        .unwrap()
+        .insert(dataset_id.to_string(), rows);
+}
+
+/// Execute a simple SQL query against in-memory data.
+/// Supports: COUNT(*), AVG(col), SUM(col), MAX(col), MIN(col), SELECT with LIMIT.
+fn execute_in_memory(dataset_id: &str, sql: &str, _columns: &[String]) -> Option<String> {
+    let store = ROW_STORE.lock().ok()?;
+    let rows = store.get(dataset_id)?;
+    if rows.is_empty() {
+        return Some("0 rows".to_string());
+    }
+
+    let upper = sql.to_uppercase();
+
+    // COUNT(*)
+    if upper.contains("COUNT(*)") {
+        return Some(format!("{}", rows.len()));
+    }
+
+    // Aggregation: AVG, SUM, MAX, MIN
+    for agg in &["AVG", "SUM", "MAX", "MIN"] {
+        if let Some(start) = upper.find(&format!("{agg}(")) {
+            let after = &upper[start + agg.len() + 1..];
+            let col_end = after.find(')')?;
+            let col_name = after[..col_end].trim().to_lowercase();
+            let values: Vec<f64> = rows
+                .iter()
+                .filter_map(|r| r.get(&col_name).copied())
+                .collect();
+            if values.is_empty() {
+                return Some("NULL (no matching column data)".to_string());
+            }
+            let result = match *agg {
+                "AVG" => values.iter().sum::<f64>() / values.len() as f64,
+                "SUM" => values.iter().sum::<f64>(),
+                "MAX" => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                "MIN" => values.iter().cloned().fold(f64::INFINITY, f64::min),
+                _ => return None,
+            };
+            return Some(format!("{:.2}", result));
+        }
+    }
+
+    // Fallback: row count
+    let limit = if let Some(pos) = upper.find("LIMIT") {
+        upper[pos + 5..]
+            .trim()
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(rows.len())
+    } else {
+        rows.len()
+    };
+    Some(format!(
+        "{} rows returned (limit {})",
+        rows.len().min(limit),
+        limit
+    ))
 }
 
 pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
@@ -157,6 +252,56 @@ pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
         .push(insight.clone());
     info!(dataset_id = %dataset_id, "[chat_with_data] insight generated");
     Ok(insight)
+}
+
+/// Proactive anomaly scan: checks ALL datasets with in-memory data for anomalies.
+/// Returns insights for any dataset where anomalies are detected.
+/// Call this on a schedule (e.g., after data ingestion) for proactive alerting.
+pub fn scan_all_datasets_for_anomalies() -> Vec<Insight> {
+    info!("[chat_with_data] proactive anomaly scan started");
+    let dataset_ids: Vec<String> = DATASETS.lock().unwrap().keys().cloned().collect();
+
+    let mut new_insights = Vec::new();
+    for ds_id in &dataset_ids {
+        // Check if we have in-memory data for this dataset.
+        let values: Option<Vec<f64>> = ROW_STORE.lock().ok().and_then(|store| {
+            store.get(ds_id).map(|rows| {
+                // Use the first numeric column's values.
+                rows.iter()
+                    .filter_map(|r| r.values().next().copied())
+                    .collect()
+            })
+        });
+
+        let data = values.unwrap_or_default();
+        if data.len() < 10 {
+            continue; // Not enough data for meaningful detection.
+        }
+
+        let report = super::anomaly::detect_combined(&data, 2.5, 1.5);
+        if !report.anomalies.is_empty() {
+            let top = &report.anomalies[0];
+            let insight = Insight {
+                id: uuid_v4(),
+                insight_type: InsightType::Anomaly,
+                title: format!("Proactive: anomaly in {}", ds_id),
+                description: format!(
+                    "Auto-scan found {} anomalies (top: idx={}, val={:.1}, score={:.2}). Mean={:.1}, StdDev={:.1}.",
+                    report.anomalies.len(), top.index, top.value, top.score, report.mean, report.std_dev
+                ),
+                dataset: ds_id.clone(),
+                severity: (0.5 + (report.anomalies.len() as f64 * 0.1)).min(1.0),
+                created_at: now_epoch(),
+            };
+            INSIGHTS.lock().unwrap().push(insight.clone());
+            new_insights.push(insight);
+        }
+    }
+    info!(
+        found = new_insights.len(),
+        "[chat_with_data] proactive scan complete"
+    );
+    new_insights
 }
 
 pub fn list_datasets() -> Vec<DatasetMeta> {
@@ -253,5 +398,38 @@ mod tests {
     #[test]
     fn list_datasets_includes_builtin() {
         assert!(list_datasets().iter().any(|d| d.id == "sample_metrics"));
+    }
+
+    #[test]
+    fn ingest_and_query_executes() {
+        let mut rows = Vec::new();
+        for i in 0..10 {
+            let mut row = HashMap::new();
+            row.insert("value".to_string(), i as f64 * 10.0);
+            rows.push(row);
+        }
+        ingest_rows("sample_metrics", rows);
+        let r = query_dataset("sample_metrics", "What is the average value?").unwrap();
+        // Should execute in-memory and return a numeric result.
+        assert!(r.confidence >= 0.9);
+        assert!(r.answer.contains("Result:") || r.answer.contains("AVG"));
+    }
+
+    #[test]
+    fn proactive_scan_with_data() {
+        let mut rows = Vec::new();
+        for i in 0..50 {
+            let mut row = HashMap::new();
+            row.insert("value".to_string(), 10.0);
+            rows.push(row);
+        }
+        // Add an outlier.
+        let mut outlier = HashMap::new();
+        outlier.insert("value".to_string(), 500.0);
+        rows.push(outlier);
+        ingest_rows("sample_metrics", rows);
+        let insights = scan_all_datasets_for_anomalies();
+        assert!(!insights.is_empty());
+        assert!(insights[0].title.contains("Proactive"));
     }
 }

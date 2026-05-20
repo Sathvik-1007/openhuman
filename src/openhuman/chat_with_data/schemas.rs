@@ -42,6 +42,16 @@ const DEFS: &[Def] = &[
         schema: s_get,
         handler: h_get,
     },
+    Def {
+        function: "ingest_rows",
+        schema: s_ingest,
+        handler: h_ingest,
+    },
+    Def {
+        function: "scan_anomalies",
+        schema: s_scan,
+        handler: h_scan,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -304,14 +314,79 @@ fn h_list_ins(p: Map<String, Value>) -> ControllerFuture {
 fn h_get(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_get_dataset(p).await })
 }
+fn h_ingest(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_ingest_rows(p).await })
+}
+fn h_scan(_p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_scan_anomalies(_p).await })
+}
+
+fn s_ingest() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "chat_with_data",
+        function: "ingest_rows",
+        description: "Ingest rows into a dataset for in-memory querying.",
+        inputs: vec![
+            FieldSchema {
+                name: "dataset_id",
+                ty: TypeSchema::String,
+                comment: "Dataset ID.",
+                required: true,
+            },
+            FieldSchema {
+                name: "rows",
+                ty: TypeSchema::Array(Box::new(TypeSchema::Json)),
+                comment: "Array of {col: value} objects.",
+                required: true,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "ingested",
+                ty: TypeSchema::U64,
+                comment: "Rows ingested.",
+                required: true,
+            },
+        ],
+    }
+}
+
+fn s_scan() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "chat_with_data",
+        function: "scan_anomalies",
+        description: "Proactively scan all datasets for anomalies.",
+        inputs: vec![],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "insights_found",
+                ty: TypeSchema::U64,
+                comment: "New insights.",
+                required: true,
+            },
+        ],
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn handlers_match() {
-        assert_eq!(all_controller_schemas().len(), 6);
-        assert_eq!(all_registered_controllers().len(), 6);
+        assert_eq!(all_controller_schemas().len(), 8);
+        assert_eq!(all_registered_controllers().len(), 8);
     }
     #[test]
     fn namespace() {
