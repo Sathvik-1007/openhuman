@@ -6,6 +6,7 @@
 //! Log prefix: `[voice_actions]`
 
 pub mod engine;
+pub mod llm_intent;
 mod rpc;
 mod schemas;
 pub mod types;

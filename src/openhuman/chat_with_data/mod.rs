@@ -5,6 +5,7 @@
 //!
 //! Log prefix: `[chat_with_data]`
 
+pub mod anomaly;
 pub mod engine;
 mod rpc;
 mod schemas;

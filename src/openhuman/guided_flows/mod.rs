@@ -11,6 +11,7 @@
 pub mod engine;
 mod rpc;
 mod schemas;
+pub mod scoring;
 pub mod types;
 
 pub use schemas::{
