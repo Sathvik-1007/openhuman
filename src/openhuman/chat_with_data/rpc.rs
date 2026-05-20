@@ -68,18 +68,11 @@ pub async fn handle_query(p: Map<String, Value>) -> Result<Value, String> {
 
 /// Attempt LLM-powered SQL generation for complex queries.
 async fn try_llm_sql_gen(ds: &DatasetMeta, question: &str) -> Option<String> {
-    use crate::api::config::effective_backend_api_url;
-    use crate::api::jwt::get_session_token;
-    use crate::api::BackendOAuthClient;
     use crate::openhuman::config::ops::load_config_with_timeout;
-    use reqwest::Method;
+    use crate::openhuman::inference::provider::create_chat_provider;
 
     let config = load_config_with_timeout().await.ok()?;
-    let token = get_session_token(&config)
-        .ok()?
-        .filter(|t| !t.trim().is_empty())?;
-    let api_url = effective_backend_api_url(&config.api_url);
-    let client = BackendOAuthClient::new(&api_url).ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
 
     let prompt = format!(
         "Generate a single SQL SELECT query for this question. Return ONLY the SQL, no explanation.\n\nTable: {}\nColumns: {}\nRow count: {}\n\nQuestion: {}\n\nSQL:",
@@ -89,43 +82,21 @@ async fn try_llm_sql_gen(ds: &DatasetMeta, question: &str) -> Option<String> {
         question
     );
 
-    let body = json!({
-        "model": "agentic-v1",
-        "temperature": 0.1,
-        "max_tokens": 200,
-        "messages": [
-            {"role": "system", "content": "You are a SQL expert. Generate only valid SELECT queries. Never use DROP, DELETE, UPDATE, INSERT, ALTER, or TRUNCATE."},
-            {"role": "user", "content": prompt}
-        ],
-    });
+    let system = "You are a SQL expert. Generate only valid SELECT queries. Never use DROP, DELETE, UPDATE, INSERT, ALTER, or TRUNCATE.";
 
-    let raw = client
-        .authed_json(
-            &token,
-            Method::POST,
-            "/openai/v1/chat/completions",
-            Some(body),
-        )
+    let text = provider
+        .chat_with_system(Some(system), &prompt, &model, 0.1)
         .await
         .ok()?;
 
-    let text = raw
-        .get("choices")?
-        .as_array()?
-        .first()?
-        .get("message")?
-        .get("content")?
-        .as_str()?
-        .trim()
-        .to_string();
-
     // Strip markdown code fences if present.
-    let sql = text
+    let trimmed = text.trim();
+    let sql = trimmed
         .strip_prefix("```sql")
-        .or_else(|| text.strip_prefix("```"))
-        .unwrap_or(&text)
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
         .strip_suffix("```")
-        .unwrap_or(&text)
+        .unwrap_or(trimmed)
         .trim()
         .to_string();
 

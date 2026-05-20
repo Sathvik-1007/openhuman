@@ -92,22 +92,15 @@ pub async fn handle_summarize_transcript(p: Map<String, Value>) -> Result<Value,
 
 /// Attempt LLM-powered transcript summarization.
 async fn try_llm_summarize(full_text: &str, segment_count: usize) -> Option<String> {
-    use crate::api::config::effective_backend_api_url;
-    use crate::api::jwt::get_session_token;
-    use crate::api::BackendOAuthClient;
     use crate::openhuman::config::ops::load_config_with_timeout;
-    use reqwest::Method;
+    use crate::openhuman::inference::provider::create_chat_provider;
 
     if full_text.is_empty() {
         return None;
     }
 
     let config = load_config_with_timeout().await.ok()?;
-    let token = get_session_token(&config)
-        .ok()?
-        .filter(|t| !t.trim().is_empty())?;
-    let api_url = effective_backend_api_url(&config.api_url);
-    let client = BackendOAuthClient::new(&api_url).ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
 
     // Truncate to ~4000 chars to fit context window.
     let text_for_llm = if full_text.len() > 4000 {
@@ -121,34 +114,12 @@ async fn try_llm_summarize(full_text: &str, segment_count: usize) -> Option<Stri
         segment_count, text_for_llm
     );
 
-    let body = json!({
-        "model": "agentic-v1",
-        "temperature": 0.3,
-        "max_tokens": 400,
-        "messages": [
-            {"role": "system", "content": "You are a meeting notes assistant. Produce concise, structured summaries."},
-            {"role": "user", "content": prompt}
-        ],
-    });
+    let system = "You are a meeting notes assistant. Produce concise, structured summaries.";
 
-    let raw = client
-        .authed_json(
-            &token,
-            Method::POST,
-            "/openai/v1/chat/completions",
-            Some(body),
-        )
+    let text = provider
+        .chat_with_system(Some(system), &prompt, &model, 0.3)
         .await
         .ok()?;
-
-    let text = raw
-        .get("choices")?
-        .as_array()?
-        .first()?
-        .get("message")?
-        .get("content")?
-        .as_str()?
-        .to_string();
 
     debug!(
         text_len = text.len(),

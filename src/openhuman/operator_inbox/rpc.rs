@@ -56,18 +56,11 @@ pub async fn handle_generate_draft(p: Map<String, Value>) -> Result<Value, Strin
 
 /// Attempt LLM-powered draft generation. Returns None if LLM unavailable.
 async fn try_llm_draft(rec: &TriageRecord, tone: &ReplyTone) -> Option<String> {
-    use crate::api::config::effective_backend_api_url;
-    use crate::api::jwt::get_session_token;
-    use crate::api::BackendOAuthClient;
     use crate::openhuman::config::ops::load_config_with_timeout;
-    use reqwest::Method;
+    use crate::openhuman::inference::provider::create_chat_provider;
 
     let config = load_config_with_timeout().await.ok()?;
-    let token = get_session_token(&config)
-        .ok()?
-        .filter(|t| !t.trim().is_empty())?;
-    let api_url = effective_backend_api_url(&config.api_url);
-    let client = BackendOAuthClient::new(&api_url).ok()?;
+    let (provider, model) = create_chat_provider("agentic", &config).ok()?;
 
     let tone_str = match tone {
         ReplyTone::Professional => "professional",
@@ -80,34 +73,12 @@ async fn try_llm_draft(rec: &TriageRecord, tone: &ReplyTone) -> Option<String> {
         tone_str, rec.sender, rec.subject, rec.body_preview
     );
 
-    let body = json!({
-        "model": "agentic-v1",
-        "temperature": 0.6,
-        "max_tokens": 250,
-        "messages": [
-            {"role": "system", "content": "You are a professional email assistant. Write concise, contextual replies."},
-            {"role": "user", "content": prompt}
-        ],
-    });
+    let system = "You are a professional email assistant. Write concise, contextual replies.";
 
-    let raw = client
-        .authed_json(
-            &token,
-            Method::POST,
-            "/openai/v1/chat/completions",
-            Some(body),
-        )
+    let text = provider
+        .chat_with_system(Some(system), &prompt, &model, 0.6)
         .await
         .ok()?;
-
-    let text = raw
-        .get("choices")?
-        .as_array()?
-        .first()?
-        .get("message")?
-        .get("content")?
-        .as_str()?
-        .to_string();
 
     debug!(triage_id = %rec.id, "[operator_inbox] LLM draft generated");
     Some(text)
