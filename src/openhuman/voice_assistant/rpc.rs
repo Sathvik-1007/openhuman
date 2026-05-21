@@ -122,15 +122,16 @@ pub async fn handle_get_status(params: Map<String, Value>) -> Result<Value, Stri
     let req: GetStatusRequest = serde_json::from_value(Value::Object(params))
         .map_err(|e| format!("{LOG_PREFIX} invalid get_status params: {e}"))?;
 
-    let (state, turns, stt, tts, last_error) = SessionRegistry::with_session(&req.session_id, |s| {
-        (
-            s.state,
-            s.turn_count,
-            s.stt_provider.clone(),
-            s.tts_provider.clone(),
-            s.last_error.clone(),
-        )
-    })?;
+    let (state, turns, stt, tts, last_error) =
+        SessionRegistry::with_session(&req.session_id, |s| {
+            (
+                s.state,
+                s.turn_count,
+                s.stt_provider.clone(),
+                s.tts_provider.clone(),
+                s.last_error.clone(),
+            )
+        })?;
 
     RpcOutcome::new(
         json!({

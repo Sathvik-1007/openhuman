@@ -186,16 +186,12 @@ fn execute_in_memory(dataset_id: &str, sql: &str, _columns: &[String]) -> Option
                                     return Some("NULL (no matching column data)".to_string());
                                 }
                                 let result = match func_name.as_str() {
-                                    "AVG" => {
-                                        values.iter().sum::<f64>() / values.len() as f64
-                                    }
+                                    "AVG" => values.iter().sum::<f64>() / values.len() as f64,
                                     "SUM" => values.iter().sum::<f64>(),
                                     "MAX" => {
                                         values.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
                                     }
-                                    "MIN" => {
-                                        values.iter().cloned().fold(f64::INFINITY, f64::min)
-                                    }
+                                    "MIN" => values.iter().cloned().fold(f64::INFINITY, f64::min),
                                     _ => return None,
                                 };
                                 return Some(format!("{:.2}", result));
@@ -207,17 +203,21 @@ fn execute_in_memory(dataset_id: &str, sql: &str, _columns: &[String]) -> Option
             }
 
             // No aggregate — return row count with LIMIT.
-            let limit = query.limit_clause.as_ref().and_then(|lc| match lc {
-                LimitClause::LimitOffset { limit, .. } => limit.as_ref().and_then(|l| {
-                    if let Expr::Value(vws) = l {
-                        if let sqlparser::ast::Value::Number(n, _) = &vws.value {
-                            return n.parse::<usize>().ok();
+            let limit = query
+                .limit_clause
+                .as_ref()
+                .and_then(|lc| match lc {
+                    LimitClause::LimitOffset { limit, .. } => limit.as_ref().and_then(|l| {
+                        if let Expr::Value(vws) = l {
+                            if let sqlparser::ast::Value::Number(n, _) = &vws.value {
+                                return n.parse::<usize>().ok();
+                            }
                         }
-                    }
-                    None
-                }),
-                _ => None,
-            }).unwrap_or(rows.len());
+                        None
+                    }),
+                    _ => None,
+                })
+                .unwrap_or(rows.len());
             return Some(format!(
                 "{} rows returned (limit {})",
                 rows.len().min(limit),
