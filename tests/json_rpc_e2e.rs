@@ -8313,6 +8313,38 @@ async fn chat_with_data_lifecycle_over_rpc() {
         "list should succeed: {list_body}"
     );
 
+    // 4. Generate insight for the dataset.
+    let insight = post_json_rpc(
+        &rpc_base,
+        703,
+        "openhuman.chat_with_data_generate_insight",
+        json!({ "dataset_id": dataset_id }),
+    )
+    .await;
+    let insight_r = assert_no_jsonrpc_error(&insight, "chat_with_data_generate_insight");
+    let insight_body = insight_r.get("result").unwrap_or(insight_r);
+    assert_eq!(
+        insight_body.get("ok"),
+        Some(&json!(true)),
+        "generate_insight should succeed: {insight_body}"
+    );
+
+    // 5. Scan all datasets for anomalies.
+    let scan = post_json_rpc(
+        &rpc_base,
+        704,
+        "openhuman.chat_with_data_scan_anomalies",
+        json!({}),
+    )
+    .await;
+    let scan_r = assert_no_jsonrpc_error(&scan, "chat_with_data_scan_anomalies");
+    let scan_body = scan_r.get("result").unwrap_or(scan_r);
+    assert_eq!(
+        scan_body.get("ok"),
+        Some(&json!(true)),
+        "scan_anomalies should succeed: {scan_body}"
+    );
+
     mock_join.abort();
     rpc_join.abort();
 }

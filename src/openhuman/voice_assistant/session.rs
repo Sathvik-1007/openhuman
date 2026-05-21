@@ -48,6 +48,8 @@ pub struct VoiceAssistantSession {
     pub last_reply: String,
     /// Conversation history for LLM context.
     pub history: Vec<ConversationTurn>,
+    /// Last error from brain turn (if any). Cleared on next successful turn.
+    pub last_error: Option<String>,
 }
 
 /// A single conversation turn (user said X, assistant replied Y).
@@ -79,6 +81,7 @@ impl VoiceAssistantSession {
             last_transcript: String::new(),
             last_reply: String::new(),
             history: Vec::new(),
+            last_error: None,
         }
     }
 

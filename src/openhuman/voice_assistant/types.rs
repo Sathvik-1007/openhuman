@@ -108,6 +108,7 @@ pub struct GetStatusResponse {
     pub total_turns: u32,
     pub stt_provider: String,
     pub tts_provider: String,
+    pub last_error: Option<String>,
 }
 
 /// Voice assistant session state.

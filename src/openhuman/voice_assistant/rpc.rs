@@ -71,6 +71,16 @@ pub async fn handle_push_audio(params: Map<String, Value>) -> Result<Value, Stri
         tokio::spawn(async move {
             if let Err(err) = brain::run_turn(&session_id).await {
                 tracing::warn!("{LOG_PREFIX} brain turn failed session={session_id} err={err}");
+                // Store error in session so get_status reveals it to the caller.
+                let _ = SessionRegistry::with_session(&session_id, |s| {
+                    s.last_error = Some(err.clone());
+                    s.state = super::types::SessionState::Listening;
+                });
+            } else {
+                // Clear any previous error on success.
+                let _ = SessionRegistry::with_session(&session_id, |s| {
+                    s.last_error = None;
+                });
             }
         });
     }
@@ -112,12 +122,13 @@ pub async fn handle_get_status(params: Map<String, Value>) -> Result<Value, Stri
     let req: GetStatusRequest = serde_json::from_value(Value::Object(params))
         .map_err(|e| format!("{LOG_PREFIX} invalid get_status params: {e}"))?;
 
-    let (state, turns, stt, tts) = SessionRegistry::with_session(&req.session_id, |s| {
+    let (state, turns, stt, tts, last_error) = SessionRegistry::with_session(&req.session_id, |s| {
         (
             s.state,
             s.turn_count,
             s.stt_provider.clone(),
             s.tts_provider.clone(),
+            s.last_error.clone(),
         )
     })?;
 
@@ -129,6 +140,7 @@ pub async fn handle_get_status(params: Map<String, Value>) -> Result<Value, Stri
             "total_turns": turns,
             "stt_provider": stt,
             "tts_provider": tts,
+            "last_error": last_error,
         }),
         vec![],
     )

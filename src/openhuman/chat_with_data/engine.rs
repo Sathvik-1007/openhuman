@@ -144,53 +144,90 @@ fn execute_in_memory(dataset_id: &str, sql: &str, _columns: &[String]) -> Option
         return Some("0 rows".to_string());
     }
 
-    let upper = sql.to_uppercase();
+    // Parse SQL with sqlparser to extract aggregation info from AST.
+    use sqlparser::ast::{
+        Expr, FunctionArg, FunctionArgExpr, FunctionArguments, LimitClause, SelectItem, SetExpr,
+        Statement,
+    };
+    use sqlparser::dialect::GenericDialect;
+    use sqlparser::parser::Parser;
 
-    // COUNT(*)
-    if upper.contains("COUNT(*)") {
-        return Some(format!("{}", rows.len()));
-    }
+    let dialect = GenericDialect {};
+    let stmts = Parser::parse_sql(&dialect, sql).ok()?;
+    let stmt = stmts.first()?;
 
-    // Aggregation: AVG, SUM, MAX, MIN
-    for agg in &["AVG", "SUM", "MAX", "MIN"] {
-        if let Some(start) = upper.find(&format!("{agg}(")) {
-            let after = &upper[start + agg.len() + 1..];
-            let col_end = after.find(')')?;
-            let col_name = after[..col_end].trim().to_lowercase();
-            let values: Vec<f64> = rows
-                .iter()
-                .filter_map(|r| r.get(&col_name).copied())
-                .collect();
-            if values.is_empty() {
-                return Some("NULL (no matching column data)".to_string());
+    if let Statement::Query(query) = stmt {
+        if let SetExpr::Select(select) = query.body.as_ref() {
+            // Check for aggregate functions in projection.
+            for item in &select.projection {
+                if let SelectItem::UnnamedExpr(Expr::Function(func)) = item {
+                    let func_name = func.name.to_string().to_uppercase();
+                    match func_name.as_str() {
+                        "COUNT" => return Some(format!("{}", rows.len())),
+                        "AVG" | "SUM" | "MAX" | "MIN" => {
+                            // Extract column name from function args.
+                            let col = match &func.args {
+                                FunctionArguments::List(arg_list) => {
+                                    arg_list.args.iter().find_map(|a| match a {
+                                        FunctionArg::Unnamed(FunctionArgExpr::Expr(
+                                            Expr::Identifier(ident),
+                                        )) => Some(ident.value.to_lowercase()),
+                                        _ => None,
+                                    })
+                                }
+                                _ => None,
+                            };
+                            if let Some(col_name) = col {
+                                let values: Vec<f64> = rows
+                                    .iter()
+                                    .filter_map(|r| r.get(&col_name).copied())
+                                    .collect();
+                                if values.is_empty() {
+                                    return Some("NULL (no matching column data)".to_string());
+                                }
+                                let result = match func_name.as_str() {
+                                    "AVG" => {
+                                        values.iter().sum::<f64>() / values.len() as f64
+                                    }
+                                    "SUM" => values.iter().sum::<f64>(),
+                                    "MAX" => {
+                                        values.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                                    }
+                                    "MIN" => {
+                                        values.iter().cloned().fold(f64::INFINITY, f64::min)
+                                    }
+                                    _ => return None,
+                                };
+                                return Some(format!("{:.2}", result));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
-            let result = match *agg {
-                "AVG" => values.iter().sum::<f64>() / values.len() as f64,
-                "SUM" => values.iter().sum::<f64>(),
-                "MAX" => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                "MIN" => values.iter().cloned().fold(f64::INFINITY, f64::min),
-                _ => return None,
-            };
-            return Some(format!("{:.2}", result));
+
+            // No aggregate — return row count with LIMIT.
+            let limit = query.limit_clause.as_ref().and_then(|lc| match lc {
+                LimitClause::LimitOffset { limit, .. } => limit.as_ref().and_then(|l| {
+                    if let Expr::Value(vws) = l {
+                        if let sqlparser::ast::Value::Number(n, _) = &vws.value {
+                            return n.parse::<usize>().ok();
+                        }
+                    }
+                    None
+                }),
+                _ => None,
+            }).unwrap_or(rows.len());
+            return Some(format!(
+                "{} rows returned (limit {})",
+                rows.len().min(limit),
+                limit
+            ));
         }
     }
 
-    // Fallback: row count
-    let limit = if let Some(pos) = upper.find("LIMIT") {
-        upper[pos + 5..]
-            .trim()
-            .split_whitespace()
-            .next()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(rows.len())
-    } else {
-        rows.len()
-    };
-    Some(format!(
-        "{} rows returned (limit {})",
-        rows.len().min(limit),
-        limit
-    ))
+    // Fallback if parsing doesn't match expected structure.
+    Some(format!("{} rows returned", rows.len()))
 }
 
 pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
@@ -418,7 +455,7 @@ mod tests {
     #[test]
     fn proactive_scan_with_data() {
         let mut rows = Vec::new();
-        for i in 0..50 {
+        for _i in 0..50 {
             let mut row = HashMap::new();
             row.insert("value".to_string(), 10.0);
             rows.push(row);
