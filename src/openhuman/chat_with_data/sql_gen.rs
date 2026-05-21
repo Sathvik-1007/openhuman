@@ -317,6 +317,11 @@ pub fn is_safe_query(sql: &str) -> Result<(), String> {
         return Err("Query contains UNION (not allowed for safety)".into());
     }
 
+    // Reject subqueries (parenthesized SELECT).
+    if upper.contains("(SELECT") {
+        return Err("Query contains subquery (not allowed for safety)".into());
+    }
+
     Ok(())
 }
 
