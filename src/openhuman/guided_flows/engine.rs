@@ -10,7 +10,12 @@ static SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, FlowSession>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static FLOWS: std::sync::LazyLock<Mutex<HashMap<String, FlowDefinition>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::from([builtin_onboarding_flow()])));
+    std::sync::LazyLock::new(|| {
+        Mutex::new(HashMap::from([
+            builtin_onboarding_flow(),
+            builtin_tool_recommendation_flow(),
+        ]))
+    });
 
 fn builtin_onboarding_flow() -> (String, FlowDefinition) {
     let flow = FlowDefinition {
@@ -64,6 +69,61 @@ fn builtin_onboarding_flow() -> (String, FlowDefinition) {
                     "Low-end (< 8GB RAM)".into(),
                     "Mid-range (8-16GB RAM)".into(),
                     "High-end (16GB+ RAM, GPU)".into(),
+                ],
+                validation: None,
+                branches: HashMap::new(),
+                next: None,
+            },
+        ],
+    };
+    (flow.id.clone(), flow)
+}
+
+fn builtin_tool_recommendation_flow() -> (String, FlowDefinition) {
+    let flow = FlowDefinition {
+        id: "tool_recommendation".into(),
+        name: "Tool Recommendation Quiz".into(),
+        description: "Recommends productivity tools based on workflow needs.".into(),
+        version: 1,
+        start_step: "work_type".into(),
+        steps: vec![
+            FlowStep {
+                id: "work_type".into(),
+                prompt: "What kind of work do you do most?".into(),
+                answer_type: AnswerType::SingleChoice,
+                choices: vec![
+                    "Writing & documentation".into(),
+                    "Code & engineering".into(),
+                    "Design & creative".into(),
+                    "Research & analysis".into(),
+                ],
+                validation: None,
+                branches: HashMap::new(),
+                next: Some("team_size".into()),
+            },
+            FlowStep {
+                id: "team_size".into(),
+                prompt: "How many people on your team?".into(),
+                answer_type: AnswerType::SingleChoice,
+                choices: vec![
+                    "Just me".into(),
+                    "2-5 people".into(),
+                    "6-20 people".into(),
+                    "20+ people".into(),
+                ],
+                validation: None,
+                branches: HashMap::new(),
+                next: Some("budget".into()),
+            },
+            FlowStep {
+                id: "budget".into(),
+                prompt: "What's your monthly budget per seat?".into(),
+                answer_type: AnswerType::SingleChoice,
+                choices: vec![
+                    "Free only".into(),
+                    "Under $10/mo".into(),
+                    "$10-30/mo".into(),
+                    "No limit".into(),
                 ],
                 validation: None,
                 branches: HashMap::new(),

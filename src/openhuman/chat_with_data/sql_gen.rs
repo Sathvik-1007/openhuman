@@ -430,4 +430,11 @@ mod tests {
         let result = generate_sql_for_question("t", &[], "count everything");
         assert!(result.is_valid);
     }
+
+    #[test]
+    fn safety_check_blocks_exec_and_subqueries() {
+        assert!(is_safe_query("EXEC sp_executesql @sql").is_err());
+        assert!(is_safe_query("EXECUTE xp_cmdshell 'dir'").is_err());
+        assert!(is_safe_query("SELECT * FROM (SELECT password FROM users)").is_err());
+    }
 }

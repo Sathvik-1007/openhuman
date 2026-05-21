@@ -253,16 +253,6 @@ fn truncate(s: &str, max: usize) -> &str {
     }
 }
 
-/// Extract the assistant message text from a chat completions response.
-fn extract_chat_completion_text(raw: &Value) -> Option<String> {
-    raw.get("choices")?
-        .get(0)?
-        .get("message")?
-        .get("content")?
-        .as_str()
-        .map(|s| s.trim().to_string())
-}
-
 /// Strip characters that sound bad when read aloud by TTS.
 fn strip_for_speech(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -314,28 +304,6 @@ mod tests {
         let s = "😀😀😀";
         let result = truncate(s, 5);
         assert_eq!(result, "😀"); // 4 bytes fits, 8 doesn't
-    }
-
-    #[test]
-    fn extract_chat_completion_text_parses_openai_format() {
-        let raw = json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello there!"
-                }
-            }]
-        });
-        assert_eq!(
-            extract_chat_completion_text(&raw),
-            Some("Hello there!".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_chat_completion_text_returns_none_on_bad_shape() {
-        assert_eq!(extract_chat_completion_text(&json!({})), None);
-        assert_eq!(extract_chat_completion_text(&json!({"choices": []})), None);
     }
 
     #[test]
