@@ -6,11 +6,13 @@
 //! Log prefix: `[chat_with_data]`
 
 pub mod anomaly;
+pub mod db_connector;
 pub mod engine;
 mod rpc;
 mod schemas;
 pub mod sql_gen;
 pub mod types;
+pub mod webhooks;
 
 pub use schemas::{
     all_controller_schemas as all_chat_with_data_controller_schemas,

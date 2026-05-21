@@ -1,9 +1,13 @@
 //! Operator inbox triage and draft engine.
 
 use super::types::*;
+use crate::openhuman::util::now_epoch;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// Maximum triage records before LRU eviction of archived items.
+const MAX_RECORDS: usize = 500;
 
 static RECORDS: std::sync::LazyLock<Mutex<HashMap<String, TriageRecord>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -42,14 +46,28 @@ pub fn triage_message_with_priority(
         status: TriageStatus::Pending,
         created_at: now_epoch(),
     };
-    RECORDS.lock().unwrap().insert(id, rec.clone());
+    let mut store = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
+    // Evict oldest archived records if at capacity.
+    if store.len() >= MAX_RECORDS {
+        let oldest = store
+            .iter()
+            .filter(|(_, r)| r.status == TriageStatus::Archived)
+            .min_by_key(|(_, r)| r.created_at)
+            .map(|(id, _)| id.clone());
+        if let Some(old_id) = oldest {
+            warn!(evicted = %old_id, "[operator_inbox] evicting oldest archived record");
+            store.remove(&old_id);
+        }
+    }
+    store.insert(id, rec.clone());
+    drop(store);
     info!(triage_id = %rec.id, priority = ?rec.priority, "[operator_inbox] message triaged");
     rec
 }
 
 pub fn generate_draft(triage_id: &str, tone: ReplyTone) -> Result<DraftReply, String> {
     debug!(triage_id = %triage_id, tone = ?tone, "[operator_inbox] generating draft");
-    let mut store = RECORDS.lock().unwrap();
+    let mut store = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
     let rec = store
         .get_mut(triage_id)
         .ok_or_else(|| format!("triage not found: {triage_id}"))?;
@@ -71,7 +89,7 @@ pub fn generate_draft(triage_id: &str, tone: ReplyTone) -> Result<DraftReply, St
 }
 
 pub fn schedule_followup(triage_id: &str, follow_up_at: u64) -> Result<TriageRecord, String> {
-    let mut store = RECORDS.lock().unwrap();
+    let mut store = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
     let rec = store
         .get_mut(triage_id)
         .ok_or_else(|| format!("triage not found: {triage_id}"))?;
@@ -81,7 +99,7 @@ pub fn schedule_followup(triage_id: &str, follow_up_at: u64) -> Result<TriageRec
 }
 
 pub fn archive_triage(triage_id: &str) -> Result<TriageRecord, String> {
-    let mut store = RECORDS.lock().unwrap();
+    let mut store = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
     let rec = store
         .get_mut(triage_id)
         .ok_or_else(|| format!("triage not found: {triage_id}"))?;
@@ -92,7 +110,11 @@ pub fn archive_triage(triage_id: &str) -> Result<TriageRecord, String> {
 
 /// Store LLM-generated draft content on a triage record.
 pub fn set_draft_content(triage_id: &str, content: &str) {
-    if let Some(rec) = RECORDS.lock().unwrap().get_mut(triage_id) {
+    if let Some(rec) = RECORDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(triage_id)
+    {
         rec.proposed_reply = Some(content.to_string());
         rec.status = TriageStatus::Drafted;
     }
@@ -101,14 +123,19 @@ pub fn set_draft_content(triage_id: &str, content: &str) {
 pub fn get_triage(triage_id: &str) -> Result<TriageRecord, String> {
     RECORDS
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get(triage_id)
         .cloned()
         .ok_or_else(|| format!("triage not found: {triage_id}"))
 }
 
 pub fn list_triage() -> Vec<TriageRecord> {
-    RECORDS.lock().unwrap().values().cloned().collect()
+    RECORDS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect()
 }
 
 fn score_priority(subject: &str, body: &str) -> TriagePriority {
@@ -134,14 +161,7 @@ fn priority_reason(p: &TriagePriority, subject: &str, _body: &str) -> String {
 }
 
 fn uuid_v4() -> String {
-    format!("oi-{}", uuid::Uuid::new_v4())
-}
-fn now_epoch() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    format!("oi-{}", crate::openhuman::util::uuid_v4())
 }
 
 #[cfg(test)]

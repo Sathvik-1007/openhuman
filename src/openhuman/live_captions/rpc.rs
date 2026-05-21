@@ -263,6 +263,84 @@ async fn transcribe_via_stt(audio_b64: &str) -> Result<String, String> {
     Ok(outcome.value.text)
 }
 
+pub async fn handle_export_transcript(p: Map<String, Value>) -> Result<Value, String> {
+    let tid = p
+        .get("transcript_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let format = p
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("markdown");
+
+    let t = store::get_transcript(tid)?;
+    let content = match format {
+        "srt" => {
+            let mut out = String::new();
+            for (i, seg) in t.segments.iter().enumerate() {
+                let start_s = seg.start_ms / 1000;
+                let start_ms = seg.start_ms % 1000;
+                let end_s = seg.end_ms / 1000;
+                let end_ms = seg.end_ms % 1000;
+                out.push_str(&format!(
+                    "{}\n{:02}:{:02}:{:02},{:03} --> {:02}:{:02}:{:02},{:03}\n{}\n\n",
+                    i + 1,
+                    start_s / 3600,
+                    (start_s % 3600) / 60,
+                    start_s % 60,
+                    start_ms,
+                    end_s / 3600,
+                    (end_s % 3600) / 60,
+                    end_s % 60,
+                    end_ms,
+                    seg.text
+                ));
+            }
+            out
+        }
+        "vtt" => {
+            let mut out = "WEBVTT\n\n".to_string();
+            for seg in &t.segments {
+                let start_s = seg.start_ms / 1000;
+                let start_ms = seg.start_ms % 1000;
+                let end_s = seg.end_ms / 1000;
+                let end_ms = seg.end_ms % 1000;
+                out.push_str(&format!(
+                    "{:02}:{:02}:{:02}.{:03} --> {:02}:{:02}:{:02}.{:03}\n{}\n\n",
+                    start_s / 3600,
+                    (start_s % 3600) / 60,
+                    start_s % 60,
+                    start_ms,
+                    end_s / 3600,
+                    (end_s % 3600) / 60,
+                    end_s % 60,
+                    end_ms,
+                    seg.text
+                ));
+            }
+            out
+        }
+        _ => {
+            // markdown
+            let mut out = format!("# {}\n\n", t.title.as_deref().unwrap_or("Transcript"));
+            for seg in &t.segments {
+                let speaker = seg.speaker.as_deref().unwrap_or("Speaker");
+                out.push_str(&format!(
+                    "**{}** [{:.1}s]: {}\n\n",
+                    speaker,
+                    seg.start_ms as f64 / 1000.0,
+                    seg.text
+                ));
+            }
+            if let Some(ref summary) = t.summary {
+                out.push_str(&format!("\n---\n\n## Summary\n\n{}\n", summary));
+            }
+            out
+        }
+    };
+    Ok(json!({"ok": true, "content": content, "format": format}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

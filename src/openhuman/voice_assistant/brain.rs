@@ -55,17 +55,45 @@ pub async fn run_turn(session_id: &str) -> Result<(), String> {
         return Ok(());
     }
 
+    // 1b. Apply noise cancellation before STT (per-session adaptive state).
+    let pcm = {
+        use super::noise_cancel::{NoiseCancelConfig, NoiseCancelState};
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        static NC_STATES: std::sync::LazyLock<Mutex<HashMap<String, NoiseCancelState>>> =
+            std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+        let mut states = NC_STATES.lock().unwrap_or_else(|e| e.into_inner());
+        let nc = states
+            .entry(session_id.to_string())
+            .or_insert_with(|| NoiseCancelState::new(NoiseCancelConfig::default()));
+        nc.process(&pcm, None)
+    };
+
     debug!(
         "{LOG_PREFIX} draining {} samples ({:.2}s) session={session_id}",
         pcm.len(),
         pcm.len() as f64 / 16_000.0
     );
 
-    // 2. STT: PCM → text.
+    // 2. STT: PCM → text. Use streaming for longer audio (>4s).
+    let stt_start = std::time::Instant::now();
     let config = crate::openhuman::config::ops::load_config_with_timeout()
         .await
         .map_err(|e| format!("{LOG_PREFIX} config load failed: {e}"))?;
-    let transcript = run_stt(&config, &pcm, &stt_provider_name, language.as_deref()).await?;
+    let transcript = if pcm.len() > 16_000 * 4 {
+        run_streaming_stt(
+            session_id,
+            &pcm,
+            &config,
+            &stt_provider_name,
+            language.as_deref(),
+        )
+        .await?
+    } else {
+        run_stt(&config, &pcm, &stt_provider_name, language.as_deref()).await?
+    };
 
     if transcript.trim().is_empty() {
         debug!("{LOG_PREFIX} empty transcript, skipping LLM session={session_id}");
@@ -75,41 +103,89 @@ pub async fn run_turn(session_id: &str) -> Result<(), String> {
         return Ok(());
     }
 
+    let stt_ms = stt_start.elapsed().as_millis();
     info!(
-        "{LOG_PREFIX} STT result: \"{}\" session={session_id}",
+        "{LOG_PREFIX} STT result: \"{}\" ({stt_ms}ms) session={session_id}",
         truncate(&transcript, 80)
     );
 
+    // 2b. Detect emotion/sentiment from transcript (non-blocking, best-effort).
+    let emotion = detect_emotion(&transcript);
+    // 2c. Detect language from transcript (heuristic, updates session).
+    let detected_lang = detect_language(&transcript);
+    // 2d. Auto-switch language if detected language differs from session language.
+    SessionRegistry::with_session(session_id, |s| {
+        s.detected_emotion = emotion;
+        if let Some(ref lang) = detected_lang {
+            // Auto-switch: update session language for next STT pass.
+            if s.language.as_deref() != Some(lang) {
+                debug!(
+                    "{LOG_PREFIX} auto-switching language: {:?} -> {lang} session={session_id}",
+                    s.language
+                );
+                s.language = Some(lang.clone());
+            }
+        }
+        s.detected_language = detected_lang;
+    })?;
+
     // 3. LLM: transcript + history → reply.
+    let llm_start = std::time::Instant::now();
     let reply = run_llm(&config, &transcript, &history).await?;
+    let llm_ms = llm_start.elapsed().as_millis();
 
     info!(
-        "{LOG_PREFIX} LLM reply: \"{}\" session={session_id}",
+        "{LOG_PREFIX} LLM reply: \"{}\" ({llm_ms}ms) session={session_id}",
         truncate(&reply, 80)
     );
 
-    // 4. TTS: reply → PCM.
-    let tts_pcm = run_tts(&config, &reply, &tts_provider_name).await?;
+    // 4. Streaming TTS: split reply into sentence chunks, synthesize and enqueue
+    //    progressively so playback starts before full synthesis completes.
+    let tts_start = std::time::Instant::now();
+    let sentences = split_into_sentences(&reply);
+    let chunk_count = sentences.len();
 
-    debug!(
-        "{LOG_PREFIX} TTS produced {} samples ({:.2}s) session={session_id}",
-        tts_pcm.len(),
-        tts_pcm.len() as f64 / 16_000.0
-    );
-
-    // 5. Enqueue outbound and record turn.
     SessionRegistry::with_session(session_id, |s| {
         s.state = SessionState::Speaking;
-        s.enqueue_outbound_pcm(&tts_pcm);
-        s.record_turn(&transcript, &reply);
     })?;
 
-    // 6. After enqueue, transition back to listening.
+    for (i, sentence) in sentences.iter().enumerate() {
+        if sentence.trim().is_empty() {
+            continue;
+        }
+        let tts_pcm = run_tts(&config, sentence, &tts_provider_name).await?;
+        debug!(
+            "{LOG_PREFIX} TTS chunk {}/{} produced {} samples ({:.2}s) session={session_id}",
+            i + 1,
+            chunk_count,
+            tts_pcm.len(),
+            tts_pcm.len() as f64 / 16_000.0
+        );
+        // Check for barge-in between chunks.
+        let interrupted = SessionRegistry::with_session(session_id, |s| {
+            if s.state != SessionState::Speaking {
+                true
+            } else {
+                s.enqueue_outbound_pcm(&tts_pcm);
+                false
+            }
+        })?;
+        if interrupted {
+            info!("{LOG_PREFIX} barge-in during streaming TTS, stopping at chunk {}/{} session={session_id}", i + 1, chunk_count);
+            break;
+        }
+    }
+
+    // 5. Record turn and transition back.
+    let tts_ms = tts_start.elapsed().as_millis();
     SessionRegistry::with_session(session_id, |s| {
-        s.state = SessionState::Listening;
+        s.record_turn(&transcript, &reply);
+        if s.state == SessionState::Speaking {
+            s.state = SessionState::Listening;
+        }
     })?;
 
-    info!("{LOG_PREFIX} turn completed session={session_id}");
+    info!("{LOG_PREFIX} turn completed session={session_id} latency: stt={stt_ms}ms llm={llm_ms}ms tts={tts_ms}ms total={}ms", stt_ms + llm_ms + tts_ms);
     Ok(())
 }
 
@@ -239,6 +315,203 @@ async fn run_tts(config: &Config, text: &str, provider_name: &str) -> Result<Vec
 }
 
 // ---------------------------------------------------------------------------
+// Emotion / Sentiment Detection
+// ---------------------------------------------------------------------------
+
+/// Detect emotion from transcript text using keyword heuristics.
+/// Returns None if neutral/uncertain. LLM-based detection is a future enhancement.
+fn detect_emotion(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let positive = [
+        "happy",
+        "great",
+        "awesome",
+        "love",
+        "excited",
+        "wonderful",
+        "fantastic",
+        "thank",
+    ];
+    let negative = [
+        "angry",
+        "frustrated",
+        "annoyed",
+        "hate",
+        "terrible",
+        "awful",
+        "upset",
+        "furious",
+    ];
+    let urgent = [
+        "help",
+        "emergency",
+        "urgent",
+        "asap",
+        "immediately",
+        "critical",
+    ];
+    let confused = [
+        "confused",
+        "don't understand",
+        "what do you mean",
+        "unclear",
+        "lost",
+    ];
+
+    for w in &urgent {
+        if lower.contains(w) {
+            return Some("urgent".into());
+        }
+    }
+    for w in &negative {
+        if lower.contains(w) {
+            return Some("negative".into());
+        }
+    }
+    for w in &confused {
+        if lower.contains(w) {
+            return Some("confused".into());
+        }
+    }
+    for w in &positive {
+        if lower.contains(w) {
+            return Some("positive".into());
+        }
+    }
+    None
+}
+
+/// Detect language from transcript using Unicode script analysis.
+/// Returns BCP-47 code or None if English (default).
+fn detect_language(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().filter(|c| c.is_alphabetic()).collect();
+    if chars.is_empty() {
+        return None;
+    }
+    // Count characters by script.
+    let mut cjk = 0usize;
+    let mut cyrillic = 0usize;
+    let mut arabic = 0usize;
+    let mut devanagari = 0usize;
+    let mut latin = 0usize;
+    for c in &chars {
+        match *c {
+            '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' => cjk += 1,
+            '\u{0400}'..='\u{04FF}' => cyrillic += 1,
+            '\u{0600}'..='\u{06FF}' => arabic += 1,
+            '\u{0900}'..='\u{097F}' => devanagari += 1,
+            'A'..='Z' | 'a'..='z' => latin += 1,
+            _ => {}
+        }
+    }
+    let total = chars.len();
+    let threshold = total / 3; // >33% of chars in a script
+    if cjk > threshold {
+        Some("zh".into())
+    } else if cyrillic > threshold {
+        Some("ru".into())
+    } else if arabic > threshold {
+        Some("ar".into())
+    } else if devanagari > threshold {
+        Some("hi".into())
+    } else if latin > threshold {
+        // Could be any Latin-script language — check for common non-English patterns.
+        let lower = text.to_lowercase();
+        if lower.contains("ñ") || lower.contains("¿") || lower.contains("¡") {
+            Some("es".into())
+        } else if lower.contains("ü")
+            || lower.contains("ö")
+            || lower.contains("ä")
+            || lower.contains("ß")
+        {
+            Some("de".into())
+        } else if lower.contains("ç") || lower.contains("ê") || lower.contains("à") {
+            Some("fr".into())
+        } else {
+            None // Default: English (no explicit tag needed)
+        }
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming STT (chunked whisper with partial results)
+// ---------------------------------------------------------------------------
+
+/// Minimum chunk size for streaming STT (2 seconds @ 16kHz).
+const STREAMING_CHUNK_SIZE: usize = 16_000 * 2;
+
+/// Process audio in chunks and emit partial transcripts.
+/// Uses LocalAgreement-2 approach: only emit text that appears in 2 consecutive runs.
+pub async fn run_streaming_stt(
+    session_id: &str,
+    pcm: &[i16],
+    config: &Config,
+    provider_name: &str,
+    language: Option<&str>,
+) -> Result<String, String> {
+    if pcm.len() < STREAMING_CHUNK_SIZE {
+        // Too short for streaming — just do a single pass.
+        return run_stt(config, pcm, provider_name, language).await;
+    }
+
+    let mut confirmed = String::new();
+    let mut prev_output = String::new();
+    let chunk_size = STREAMING_CHUNK_SIZE;
+    let mut offset = 0;
+
+    while offset < pcm.len() {
+        let end = (offset + chunk_size * 2).min(pcm.len()); // Process 2x chunk for overlap
+        let chunk = &pcm[..end];
+
+        let current_output = run_stt(config, chunk, provider_name, language).await?;
+
+        // LocalAgreement: find longest common prefix between prev and current.
+        if !prev_output.is_empty() {
+            let agreement = longest_common_prefix(&prev_output, &current_output);
+            if agreement.len() > confirmed.len() {
+                // Update partial transcript on session.
+                let partial = agreement.clone();
+                let _ = SessionRegistry::with_session(session_id, |s| {
+                    s.partial_transcript = partial;
+                });
+                confirmed = agreement;
+            }
+        }
+
+        prev_output = current_output;
+        offset += chunk_size;
+    }
+
+    // Final output is the last full transcription.
+    let final_text = if prev_output.len() > confirmed.len() {
+        prev_output
+    } else {
+        confirmed
+    };
+
+    // Clear partial transcript.
+    let _ = SessionRegistry::with_session(session_id, |s| {
+        s.partial_transcript.clear();
+    });
+
+    Ok(final_text)
+}
+
+/// Find the longest common prefix of two strings (word-aligned).
+fn longest_common_prefix(a: &str, b: &str) -> String {
+    let a_words: Vec<&str> = a.split_whitespace().collect();
+    let b_words: Vec<&str> = b.split_whitespace().collect();
+    let common_count = a_words
+        .iter()
+        .zip(b_words.iter())
+        .take_while(|(x, y)| x == y)
+        .count();
+    a_words[..common_count].join(" ")
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -250,6 +523,27 @@ fn truncate(s: &str, max: usize) -> &str {
         let end = s.floor_char_boundary(max);
         &s[..end]
     }
+}
+
+/// Split text into sentence-level chunks for streaming TTS.
+/// Splits on sentence-ending punctuation while keeping the punctuation attached.
+fn split_into_sentences(text: &str) -> Vec<String> {
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if (ch == '.' || ch == '!' || ch == '?' || ch == ';') && current.len() > 10 {
+            sentences.push(current.trim().to_string());
+            current = String::new();
+        }
+    }
+    if !current.trim().is_empty() {
+        sentences.push(current.trim().to_string());
+    }
+    if sentences.is_empty() {
+        sentences.push(text.to_string());
+    }
+    sentences
 }
 
 #[cfg(test)]

@@ -135,6 +135,71 @@ pub async fn handle_get_session(p: Map<String, Value>) -> Result<Value, String> 
     }
 }
 
+pub async fn handle_register_flow(p: Map<String, Value>) -> Result<Value, String> {
+    let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let description = p.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let start_step = p.get("start_step").and_then(|v| v.as_str()).unwrap_or("");
+    let steps_raw = p.get("steps").and_then(|v| v.as_array());
+
+    if id.is_empty() || name.is_empty() || start_step.is_empty() {
+        return Ok(json!({"ok": false, "error": "id, name, and start_step are required"}));
+    }
+
+    let steps = match steps_raw {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|s| {
+                let obj = s.as_object()?;
+                Some(super::types::FlowStep {
+                    id: obj.get("id")?.as_str()?.into(),
+                    prompt: obj.get("prompt")?.as_str()?.into(),
+                    answer_type: match obj
+                        .get("answer_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("text")
+                    {
+                        "single_choice" => super::types::AnswerType::SingleChoice,
+                        "multi_choice" => super::types::AnswerType::MultiChoice,
+                        "boolean" => super::types::AnswerType::Boolean,
+                        "number" => super::types::AnswerType::Number,
+                        _ => super::types::AnswerType::FreeText,
+                    },
+                    choices: obj
+                        .get("choices")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    validation: obj
+                        .get("validation")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    branches: obj
+                        .get("branches")
+                        .and_then(|v| v.as_object())
+                        .map(|m| {
+                            m.iter()
+                                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.into())))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    next: obj.get("next").and_then(|v| v.as_str()).map(String::from),
+                })
+            })
+            .collect(),
+        None => return Ok(json!({"ok": false, "error": "steps array is required"})),
+    };
+
+    match engine::register_flow(id, name, description, start_step, steps) {
+        Ok(flow_id) => Ok(json!({"ok": true, "flow_id": flow_id})),
+        Err(e) => Ok(json!({"ok": false, "error": e})),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,16 +1,11 @@
-//! Real IMAP client for operator inbox.
+//! IMAP/SMTP types and algorithms for operator inbox.
 //!
-//! Wraps `async-imap` to provide email fetching with IDLE (push notifications),
-//! and `lettre` for SMTP sending. Uses the existing `mail-parser` integration
-//! in `parser.rs` for MIME parsing.
+//! **Phase 1 scope**: Config types, JWZ threading algorithm, LLM prompt builders,
+//! validation, and deadline extraction — all pure logic with no network I/O.
 //!
-//! ## Architecture
-//!
-//! ```text
-//! [IMAP IDLE] → new email → [mail-parser] → [triage engine] → [LLM draft]
-//!                                                                    ↓
-//!                                                              [lettre SMTP]
-//! ```
+//! **Phase 2 (follow-up PR)**: Wire `async-imap` for IDLE-based email fetching
+//! and `lettre` for SMTP sending. The types and algorithms here are designed to
+//! slot directly into that integration without breaking changes.
 //!
 //! ## Log prefix
 //!
@@ -25,8 +20,9 @@ pub struct ImapConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
-    /// Encrypted at rest; decrypted before use.
-    pub password_encrypted: String,
+    /// Plaintext password (or app-specific password). Callers are responsible
+    /// for decrypting before constructing this config.
+    pub password: String,
     pub use_tls: bool,
     pub mailbox: String,
     /// OAuth2 token (for Gmail/Outlook).
@@ -39,7 +35,7 @@ pub struct SmtpConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
-    pub password_encrypted: String,
+    pub password: String,
     pub use_tls: bool,
     pub from_address: String,
     pub from_name: String,
@@ -242,7 +238,7 @@ pub fn validate_imap_config(config: &ImapConfig) -> Result<(), String> {
     if config.username.is_empty() {
         return Err("IMAP username is required".into());
     }
-    if config.password_encrypted.is_empty() && config.oauth2_token.is_none() {
+    if config.password.is_empty() && config.oauth2_token.is_none() {
         return Err("Either password or OAuth2 token is required".into());
     }
     if config.port == 0 {
@@ -414,7 +410,7 @@ mod tests {
             host: "imap.gmail.com".into(),
             port: 993,
             username: "user@gmail.com".into(),
-            password_encrypted: "encrypted_pass".into(),
+            password: "my_pass".into(),
             use_tls: true,
             mailbox: "INBOX".into(),
             oauth2_token: None,
@@ -428,7 +424,7 @@ mod tests {
             host: "".into(),
             port: 993,
             username: "user".into(),
-            password_encrypted: "pass".into(),
+            password: "pass".into(),
             use_tls: true,
             mailbox: "INBOX".into(),
             oauth2_token: None,
@@ -442,7 +438,7 @@ mod tests {
             host: "imap.example.com".into(),
             port: 993,
             username: "user".into(),
-            password_encrypted: "".into(),
+            password: "".into(),
             use_tls: true,
             mailbox: "INBOX".into(),
             oauth2_token: None,
@@ -456,7 +452,7 @@ mod tests {
             host: "imap.gmail.com".into(),
             port: 993,
             username: "user@gmail.com".into(),
-            password_encrypted: "".into(),
+            password: "".into(),
             use_tls: true,
             mailbox: "INBOX".into(),
             oauth2_token: Some("ya29.token".into()),
@@ -470,7 +466,7 @@ mod tests {
             host: "smtp.gmail.com".into(),
             port: 587,
             username: "user".into(),
-            password_encrypted: "pass".into(),
+            password: "pass".into(),
             use_tls: true,
             from_address: "user@gmail.com".into(),
             from_name: "User".into(),
@@ -484,7 +480,7 @@ mod tests {
             host: "smtp.example.com".into(),
             port: 587,
             username: "user".into(),
-            password_encrypted: "pass".into(),
+            password: "pass".into(),
             use_tls: true,
             from_address: "not-an-email".into(),
             from_name: "User".into(),

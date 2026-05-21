@@ -42,6 +42,26 @@ const DEFS: &[Def] = &[
         schema: s_archive,
         handler: h_archive,
     },
+    Def {
+        function: "fetch_inbox",
+        schema: s_fetch_inbox,
+        handler: h_fetch_inbox,
+    },
+    Def {
+        function: "send_reply",
+        schema: s_send_reply,
+        handler: h_send_reply,
+    },
+    Def {
+        function: "start_poller",
+        schema: s_start_poller,
+        handler: h_start_poller,
+    },
+    Def {
+        function: "stop_poller",
+        schema: s_stop_poller,
+        handler: h_stop_poller,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -311,6 +331,209 @@ fn h_list(p: Map<String, Value>) -> ControllerFuture {
 fn h_archive(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_archive(p).await })
 }
+fn h_fetch_inbox(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_fetch_inbox(p).await })
+}
+fn h_send_reply(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_send_reply(p).await })
+}
+fn h_start_poller(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_start_poller(p).await })
+}
+fn h_stop_poller(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_stop_poller(p).await })
+}
+
+fn s_start_poller() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "operator_inbox",
+        function: "start_poller",
+        description: "Start background IMAP polling loop.",
+        inputs: vec![
+            FieldSchema {
+                name: "host",
+                ty: TypeSchema::String,
+                comment: "IMAP host.",
+                required: true,
+            },
+            FieldSchema {
+                name: "username",
+                ty: TypeSchema::String,
+                comment: "IMAP username.",
+                required: true,
+            },
+            FieldSchema {
+                name: "password",
+                ty: TypeSchema::String,
+                comment: "IMAP password.",
+                required: true,
+            },
+            FieldSchema {
+                name: "interval_secs",
+                ty: TypeSchema::U64,
+                comment: "Poll interval in seconds. Default: 120.",
+                required: false,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "started",
+                ty: TypeSchema::Bool,
+                comment: "Whether poller was started (false if already running).",
+                required: true,
+            },
+        ],
+    }
+}
+
+fn s_stop_poller() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "operator_inbox",
+        function: "stop_poller",
+        description: "Stop background IMAP polling loop.",
+        inputs: vec![],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "was_running",
+                ty: TypeSchema::Bool,
+                comment: "Whether poller was running.",
+                required: true,
+            },
+        ],
+    }
+}
+
+fn s_fetch_inbox() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "operator_inbox",
+        function: "fetch_inbox",
+        description: "Fetch new emails from configured IMAP server and auto-triage them.",
+        inputs: vec![
+            FieldSchema {
+                name: "host",
+                ty: TypeSchema::String,
+                comment: "IMAP host.",
+                required: true,
+            },
+            FieldSchema {
+                name: "port",
+                ty: TypeSchema::U64,
+                comment: "IMAP port (993 for TLS).",
+                required: false,
+            },
+            FieldSchema {
+                name: "username",
+                ty: TypeSchema::String,
+                comment: "IMAP username.",
+                required: true,
+            },
+            FieldSchema {
+                name: "password",
+                ty: TypeSchema::String,
+                comment: "IMAP password.",
+                required: true,
+            },
+            FieldSchema {
+                name: "mailbox",
+                ty: TypeSchema::String,
+                comment: "Mailbox name. Default: INBOX.",
+                required: false,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "fetched",
+                ty: TypeSchema::U64,
+                comment: "Emails fetched.",
+                required: true,
+            },
+            FieldSchema {
+                name: "triaged",
+                ty: TypeSchema::Array(Box::new(TypeSchema::Json)),
+                comment: "Triage results for each email.",
+                required: true,
+            },
+        ],
+    }
+}
+
+fn s_send_reply() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "operator_inbox",
+        function: "send_reply",
+        description: "Send a drafted reply via SMTP.",
+        inputs: vec![
+            FieldSchema {
+                name: "triage_id",
+                ty: TypeSchema::String,
+                comment: "Triage record to reply to.",
+                required: true,
+            },
+            FieldSchema {
+                name: "smtp_host",
+                ty: TypeSchema::String,
+                comment: "SMTP host.",
+                required: true,
+            },
+            FieldSchema {
+                name: "smtp_port",
+                ty: TypeSchema::U64,
+                comment: "SMTP port (587 for STARTTLS).",
+                required: false,
+            },
+            FieldSchema {
+                name: "username",
+                ty: TypeSchema::String,
+                comment: "SMTP username.",
+                required: true,
+            },
+            FieldSchema {
+                name: "password",
+                ty: TypeSchema::String,
+                comment: "SMTP password.",
+                required: true,
+            },
+            FieldSchema {
+                name: "from",
+                ty: TypeSchema::String,
+                comment: "From address.",
+                required: true,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "message_id",
+                ty: TypeSchema::String,
+                comment: "Sent message ID.",
+                required: true,
+            },
+        ],
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -321,7 +544,7 @@ mod tests {
             all_controller_schemas().len(),
             all_registered_controllers().len()
         );
-        assert_eq!(all_controller_schemas().len(), 6);
+        assert_eq!(all_controller_schemas().len(), 10);
     }
     #[test]
     fn namespace() {

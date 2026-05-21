@@ -4,9 +4,11 @@
 //!
 //! Log prefix: `[operator_inbox]`
 
+pub mod connection;
 pub mod engine;
 pub mod imap_client;
 pub mod parser;
+pub mod poller;
 mod rpc;
 mod schemas;
 pub mod types;

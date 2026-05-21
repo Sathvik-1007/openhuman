@@ -186,6 +186,112 @@ pub async fn handle_archive(p: Map<String, Value>) -> Result<Value, String> {
     }
 }
 
+pub async fn handle_fetch_inbox(p: Map<String, Value>) -> Result<Value, String> {
+    let host = p.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    let port = p.get("port").and_then(|v| v.as_u64()).unwrap_or(993) as u16;
+    let username = p.get("username").and_then(|v| v.as_str()).unwrap_or("");
+    let password = p.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    let mailbox = p.get("mailbox").and_then(|v| v.as_str()).unwrap_or("INBOX");
+
+    if host.is_empty() || username.is_empty() || password.is_empty() {
+        return Ok(json!({"ok": false, "error": "host, username, and password are required"}));
+    }
+
+    let config = super::imap_client::ImapConfig {
+        host: host.into(),
+        port,
+        username: username.into(),
+        password: password.into(),
+        use_tls: true,
+        mailbox: mailbox.into(),
+        oauth2_token: None,
+    };
+
+    match super::connection::fetch_new_emails(&config).await {
+        Ok(result) => {
+            let triaged: Vec<Value> = result
+                .emails
+                .iter()
+                .map(|email| {
+                    let r = engine::triage_message(
+                        super::types::MessageSource::Email,
+                        &email.from,
+                        &email.subject,
+                        &email.body_text,
+                    );
+                    json!({"triage_id": r.id, "priority": r.priority, "subject": r.subject})
+                })
+                .collect();
+            Ok(json!({"ok": true, "fetched": result.new_count, "triaged": triaged}))
+        }
+        Err(e) => Ok(json!({"ok": false, "error": e})),
+    }
+}
+
+pub async fn handle_send_reply(p: Map<String, Value>) -> Result<Value, String> {
+    let triage_id = p.get("triage_id").and_then(|v| v.as_str()).unwrap_or("");
+    let smtp_host = p.get("smtp_host").and_then(|v| v.as_str()).unwrap_or("");
+    let smtp_port = p.get("smtp_port").and_then(|v| v.as_u64()).unwrap_or(587) as u16;
+    let username = p.get("username").and_then(|v| v.as_str()).unwrap_or("");
+    let password = p.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    let from = p.get("from").and_then(|v| v.as_str()).unwrap_or("");
+
+    if triage_id.is_empty() || smtp_host.is_empty() || from.is_empty() {
+        return Ok(json!({"ok": false, "error": "triage_id, smtp_host, and from are required"}));
+    }
+
+    // Get the triage record and its draft.
+    let rec = engine::get_triage(triage_id)?;
+    let content = rec
+        .proposed_reply
+        .ok_or_else(|| "no draft generated for this triage".to_string())?;
+
+    let config = super::imap_client::SmtpConfig {
+        host: smtp_host.into(),
+        port: smtp_port,
+        username: username.into(),
+        password: password.into(),
+        use_tls: true,
+        from_address: from.into(),
+        from_name: String::new(),
+    };
+
+    match super::connection::send_reply(&config, &rec.sender, &rec.subject, &content).await {
+        Ok(()) => Ok(json!({"ok": true, "message_id": format!("sent-{}", triage_id)})),
+        Err(e) => Ok(json!({"ok": false, "error": e})),
+    }
+}
+
+pub async fn handle_start_poller(p: Map<String, Value>) -> Result<Value, String> {
+    let host = p.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    let username = p.get("username").and_then(|v| v.as_str()).unwrap_or("");
+    let password = p.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    let interval = p.get("interval_secs").and_then(|v| v.as_u64());
+
+    if host.is_empty() || username.is_empty() || password.is_empty() {
+        return Ok(json!({"ok": false, "error": "host, username, password required"}));
+    }
+
+    let config = super::imap_client::ImapConfig {
+        host: host.into(),
+        port: 993,
+        username: username.into(),
+        password: password.into(),
+        use_tls: true,
+        mailbox: "INBOX".into(),
+        oauth2_token: None,
+    };
+
+    let started = super::poller::start_polling(config, interval);
+    Ok(json!({"ok": true, "started": started}))
+}
+
+pub async fn handle_stop_poller(_p: Map<String, Value>) -> Result<Value, String> {
+    let was_running = super::poller::is_polling();
+    super::poller::stop_polling();
+    Ok(json!({"ok": true, "was_running": was_running}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

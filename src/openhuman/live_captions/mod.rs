@@ -5,10 +5,13 @@
 //!
 //! Log prefix: `[live_captions]`
 
+pub mod diarize;
+pub mod persist;
 mod rpc;
 mod schemas;
 pub mod store;
 pub mod types;
+pub mod voice_profiles;
 
 pub use schemas::{
     all_controller_schemas as all_live_captions_controller_schemas,

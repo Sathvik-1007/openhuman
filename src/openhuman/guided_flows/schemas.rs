@@ -35,6 +35,11 @@ const DEFS: &[Def] = &[
         schema: schema_get_session,
         handler: handle_get_session,
     },
+    Def {
+        function: "register_flow",
+        schema: schema_register_flow,
+        handler: handle_register_flow,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -278,6 +283,63 @@ fn handle_submit_answer(p: Map<String, Value>) -> ControllerFuture {
 fn handle_get_session(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_get_session(p).await })
 }
+fn handle_register_flow(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_register_flow(p).await })
+}
+
+fn schema_register_flow() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "guided_flows",
+        function: "register_flow",
+        description: "Register a custom flow definition.",
+        inputs: vec![
+            FieldSchema {
+                name: "id",
+                ty: TypeSchema::String,
+                comment: "Unique flow ID.",
+                required: true,
+            },
+            FieldSchema {
+                name: "name",
+                ty: TypeSchema::String,
+                comment: "Display name.",
+                required: true,
+            },
+            FieldSchema {
+                name: "description",
+                ty: TypeSchema::String,
+                comment: "Flow description.",
+                required: true,
+            },
+            FieldSchema {
+                name: "start_step",
+                ty: TypeSchema::String,
+                comment: "ID of the first step.",
+                required: true,
+            },
+            FieldSchema {
+                name: "steps",
+                ty: TypeSchema::Array(Box::new(TypeSchema::Json)),
+                comment: "Array of step definitions.",
+                required: true,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "flow_id",
+                ty: TypeSchema::String,
+                comment: "Registered flow ID.",
+                required: true,
+            },
+        ],
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -296,7 +358,13 @@ mod tests {
         assert_eq!(s, h);
         assert_eq!(
             s,
-            vec!["list_flows", "start_flow", "submit_answer", "get_session"]
+            vec![
+                "list_flows",
+                "start_flow",
+                "submit_answer",
+                "get_session",
+                "register_flow"
+            ]
         );
     }
 

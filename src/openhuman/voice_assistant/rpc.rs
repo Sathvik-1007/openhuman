@@ -156,6 +156,32 @@ pub async fn handle_get_status(params: Map<String, Value>) -> Result<Value, Stri
     .into_cli_compatible_json()
 }
 
+pub async fn handle_interrupt(params: Map<String, Value>) -> Result<Value, String> {
+    let req: InterruptRequest = serde_json::from_value(Value::Object(params))
+        .map_err(|e| format!("{LOG_PREFIX} invalid interrupt params: {e}"))?;
+
+    let (was_speaking, discarded) = SessionRegistry::with_session(&req.session_id, |s| {
+        let was = s.state == SessionState::Speaking;
+        let d = s.interrupt();
+        (was, d)
+    })?;
+
+    info!(
+        "{LOG_PREFIX} interrupt session={} was_speaking={was_speaking} discarded={discarded}",
+        req.session_id
+    );
+
+    RpcOutcome::new(
+        json!({
+            "ok": true,
+            "was_speaking": was_speaking,
+            "discarded_samples": discarded,
+        }),
+        vec![],
+    )
+    .into_cli_compatible_json()
+}
+
 pub async fn handle_stop_session(params: Map<String, Value>) -> Result<Value, String> {
     let req: StopSessionRequest = serde_json::from_value(Value::Object(params))
         .map_err(|e| format!("{LOG_PREFIX} invalid stop_session params: {e}"))?;

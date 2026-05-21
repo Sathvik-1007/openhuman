@@ -34,6 +34,17 @@ pub struct VoiceIntent {
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
     pub created_at: u64,
+    /// Previous intents in this conversation for multi-turn context.
+    #[serde(default)]
+    pub context_history: Vec<String>,
+}
+
+/// Multi-turn conversation context for voice actions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionContext {
+    pub session_id: String,
+    pub intents: Vec<String>,
+    pub last_active: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +99,7 @@ mod tests {
             result: None,
             error: None,
             created_at: 0,
+            context_history: vec![],
         };
         let json = serde_json::to_string(&vi).unwrap();
         let back: VoiceIntent = serde_json::from_str(&json).unwrap();

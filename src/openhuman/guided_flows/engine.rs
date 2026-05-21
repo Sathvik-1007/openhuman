@@ -5,6 +5,10 @@ use std::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::openhuman::guided_flows::types::*;
+use crate::openhuman::util::{now_epoch, uuid_v4};
+
+/// Maximum concurrent flow sessions before LRU eviction.
+const MAX_SESSIONS: usize = 64;
 
 static SESSIONS: std::sync::LazyLock<Mutex<HashMap<String, FlowSession>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -135,7 +139,12 @@ fn builtin_tool_recommendation_flow() -> (String, FlowDefinition) {
 }
 
 pub fn list_flows() -> Vec<FlowDefinition> {
-    let flows: Vec<FlowDefinition> = FLOWS.lock().unwrap().values().cloned().collect();
+    let flows: Vec<FlowDefinition> = FLOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect();
     debug!(count = flows.len(), "[guided_flows] listing flows");
     flows
 }
@@ -145,7 +154,7 @@ pub fn start_flow(flow_id: &str, session_id: Option<String>) -> Result<FlowSessi
     let def = flows
         .get(flow_id)
         .ok_or_else(|| format!("flow not found: {flow_id}"))?;
-    let sid = session_id.unwrap_or_else(uuid_v4);
+    let sid = session_id.unwrap_or_else(|| format!("gf-{}", uuid_v4()));
     let session = FlowSession {
         session_id: sid.clone(),
         flow_id: flow_id.to_string(),
@@ -155,10 +164,30 @@ pub fn start_flow(flow_id: &str, session_id: Option<String>) -> Result<FlowSessi
         recommendation: None,
         created_at: now_epoch(),
     };
-    SESSIONS
-        .lock()
-        .map_err(|e| format!("lock poisoned: {e}"))?
-        .insert(sid, session.clone());
+    let mut sessions = SESSIONS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    // Evict completed sessions first, then LRU if still at capacity.
+    if sessions.len() >= MAX_SESSIONS {
+        let completed: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.state == FlowSessionState::Completed)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in completed {
+            sessions.remove(&id);
+        }
+    }
+    if sessions.len() >= MAX_SESSIONS {
+        // Evict oldest by created_at.
+        if let Some(oldest_id) = sessions
+            .values()
+            .min_by_key(|s| s.created_at)
+            .map(|s| s.session_id.clone())
+        {
+            debug!(evicted = %oldest_id, "[guided_flows] evicting LRU session (at capacity)");
+            sessions.remove(&oldest_id);
+        }
+    }
+    sessions.insert(sid, session.clone());
     info!(flow_id = %flow_id, session_id = %session.session_id, "[guided_flows] flow started");
     Ok(session)
 }
@@ -411,16 +440,38 @@ fn generate_recommendation(_def: &FlowDefinition, answers: &[StepAnswer]) -> Rec
     }
 }
 
-fn uuid_v4() -> String {
-    format!("gf-{}", uuid::Uuid::new_v4())
-}
-
-fn now_epoch() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub fn register_flow(
+    id: &str,
+    name: &str,
+    description: &str,
+    start_step: &str,
+    steps: Vec<FlowStep>,
+) -> Result<String, String> {
+    if id.is_empty() || name.is_empty() || start_step.is_empty() {
+        return Err("id, name, and start_step are required".into());
+    }
+    if steps.is_empty() {
+        return Err("at least one step is required".into());
+    }
+    // Validate start_step exists in steps.
+    if !steps.iter().any(|s| s.id == start_step) {
+        return Err(format!("start_step '{}' not found in steps", start_step));
+    }
+    let flow = FlowDefinition {
+        id: id.into(),
+        name: name.into(),
+        description: description.into(),
+        version: 1,
+        start_step: start_step.into(),
+        steps,
+    };
+    let flow_id = flow.id.clone();
+    FLOWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(flow_id.clone(), flow);
+    info!(flow_id = %flow_id, "[guided_flows] custom flow registered");
+    Ok(flow_id)
 }
 
 #[cfg(test)]

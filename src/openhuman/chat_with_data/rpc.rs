@@ -203,6 +203,17 @@ pub async fn handle_scan_anomalies(_p: Map<String, Value>) -> Result<Value, Stri
     Ok(json!({"ok": true, "insights_found": items.len(), "insights": items}))
 }
 
+pub async fn handle_delete_dataset(p: Map<String, Value>) -> Result<Value, String> {
+    let id = p.get("dataset_id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.is_empty() {
+        return Ok(json!({"ok": false, "error": "dataset_id is required"}));
+    }
+    match engine::delete_dataset(id) {
+        Ok(()) => Ok(json!({"ok": true, "deleted": id})),
+        Err(e) => Ok(json!({"ok": false, "error": e})),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

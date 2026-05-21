@@ -64,6 +64,11 @@ const DEFS: &[Def] = &[
         schema: schema_resume,
         handler: h_resume,
     },
+    Def {
+        function: "export_transcript",
+        schema: schema_export,
+        handler: h_export,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -548,6 +553,51 @@ fn schema_resume() -> ControllerSchema {
     }
 }
 
+fn schema_export() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "live_captions",
+        function: "export_transcript",
+        description: "Export a transcript in SRT, VTT, or markdown format.",
+        inputs: vec![
+            FieldSchema {
+                name: "transcript_id",
+                ty: TypeSchema::String,
+                comment: "Transcript ID.",
+                required: true,
+            },
+            FieldSchema {
+                name: "format",
+                ty: TypeSchema::String,
+                comment: "srt|vtt|markdown. Default: markdown.",
+                required: false,
+            },
+        ],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "content",
+                ty: TypeSchema::String,
+                comment: "Exported content string.",
+                required: true,
+            },
+            FieldSchema {
+                name: "format",
+                ty: TypeSchema::String,
+                comment: "Format used.",
+                required: true,
+            },
+        ],
+    }
+}
+fn h_export(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_export_transcript(p).await })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,7 +613,7 @@ mod tests {
             .map(|c| c.schema.function)
             .collect();
         assert_eq!(s, h);
-        assert_eq!(s.len(), 10);
+        assert_eq!(s.len(), 11);
     }
 
     #[test]

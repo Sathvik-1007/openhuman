@@ -36,6 +36,11 @@ const DEFS: &[Def] = &[
         handler: handle_get_status,
     },
     Def {
+        function: "interrupt",
+        schema: schema_interrupt,
+        handler: handle_interrupt,
+    },
+    Def {
         function: "stop_session",
         schema: schema_stop_session,
         handler: handle_stop_session,
@@ -260,6 +265,41 @@ fn schema_get_status() -> ControllerSchema {
     }
 }
 
+fn schema_interrupt() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "voice_assistant",
+        function: "interrupt",
+        description: "Interrupt (barge-in) the current TTS playback. Clears outbound audio and \
+             transitions back to listening. No-op if not currently speaking.",
+        inputs: vec![FieldSchema {
+            name: "session_id",
+            ty: TypeSchema::String,
+            comment: "Session key.",
+            required: true,
+        }],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "True when the interrupt was processed.",
+                required: true,
+            },
+            FieldSchema {
+                name: "was_speaking",
+                ty: TypeSchema::Bool,
+                comment: "True if the session was actively speaking when interrupted.",
+                required: true,
+            },
+            FieldSchema {
+                name: "discarded_samples",
+                ty: TypeSchema::F64,
+                comment: "Number of PCM samples discarded from the outbound buffer.",
+                required: true,
+            },
+        ],
+    }
+}
+
 fn schema_stop_session() -> ControllerSchema {
     ControllerSchema {
         namespace: "voice_assistant",
@@ -338,6 +378,9 @@ fn handle_poll_response(p: Map<String, Value>) -> ControllerFuture {
 fn handle_get_status(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_get_status(p).await })
 }
+fn handle_interrupt(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_interrupt(p).await })
+}
 fn handle_stop_session(p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_stop_session(p).await })
 }
@@ -364,6 +407,7 @@ mod tests {
                 "push_audio",
                 "poll_response",
                 "get_status",
+                "interrupt",
                 "stop_session"
             ]
         );

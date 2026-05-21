@@ -1,6 +1,7 @@
 //! Chat-with-data query and insight engine.
 
 use super::types::*;
+use crate::openhuman::util::now_epoch;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::{debug, info};
@@ -43,7 +44,10 @@ pub fn register_dataset(
         row_count,
         registered_at: now_epoch(),
     };
-    DATASETS.lock().unwrap().insert(id, d.clone());
+    DATASETS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, d.clone());
     info!(dataset_id = %d.id, name = %d.name, "[chat_with_data] dataset registered");
     d
 }
@@ -63,8 +67,26 @@ pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, St
         return Err(format!("unsafe query rejected: {e}"));
     }
 
-    // Execute against in-memory data if available.
-    let execution_result = if generated.is_valid {
+    // Execute against in-memory data if available, or SQLite if source is Sqlite.
+    let execution_result = if ds.source == DataSource::Sqlite {
+        // Try real SQLite execution via db_connector.
+        // Dataset ID encodes the path for Sqlite sources (convention: "sqlite:/path/to/db:table").
+        let db_path = ds
+            .id
+            .strip_prefix("sqlite:")
+            .and_then(|s| s.split(':').next());
+        if let Some(path) = db_path {
+            match super::db_connector::execute_sqlite_query(path, &generated.sql) {
+                Ok(rows) => Some(format!("{} rows returned", rows.len())),
+                Err(e) => {
+                    debug!("[chat_with_data] sqlite exec failed, falling back: {e}");
+                    None
+                }
+            }
+        } else {
+            execute_in_memory(dataset_id, &generated.sql, &ds.columns)
+        }
+    } else if generated.is_valid {
         execute_in_memory(dataset_id, &generated.sql, &ds.columns)
     } else {
         None
@@ -131,7 +153,7 @@ pub fn ingest_rows(dataset_id: &str, rows: Vec<HashMap<String, f64>>) {
     info!(dataset_id = %dataset_id, row_count = rows.len(), "[chat_with_data] rows ingested");
     ROW_STORE
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .insert(dataset_id.to_string(), rows);
 }
 
@@ -296,7 +318,12 @@ pub fn generate_insight(dataset_id: &str) -> Result<Insight, String> {
 /// Call this on a schedule (e.g., after data ingestion) for proactive alerting.
 pub fn scan_all_datasets_for_anomalies() -> Vec<Insight> {
     info!("[chat_with_data] proactive anomaly scan started");
-    let dataset_ids: Vec<String> = DATASETS.lock().unwrap().keys().cloned().collect();
+    let dataset_ids: Vec<String> = DATASETS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .keys()
+        .cloned()
+        .collect();
 
     let mut new_insights = Vec::new();
     for ds_id in &dataset_ids {
@@ -330,7 +357,15 @@ pub fn scan_all_datasets_for_anomalies() -> Vec<Insight> {
                 severity: (0.5 + (report.anomalies.len() as f64 * 0.1)).min(1.0),
                 created_at: now_epoch(),
             };
-            INSIGHTS.lock().unwrap().push(insight.clone());
+            INSIGHTS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(insight.clone());
+            // Fire webhook notification for anomaly detection.
+            super::webhooks::notify_insight(
+                &insight,
+                super::webhooks::WebhookEvent::AnomalyDetected,
+            );
             new_insights.push(insight);
         }
     }
@@ -342,10 +377,15 @@ pub fn scan_all_datasets_for_anomalies() -> Vec<Insight> {
 }
 
 pub fn list_datasets() -> Vec<DatasetMeta> {
-    DATASETS.lock().unwrap().values().cloned().collect()
+    DATASETS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect()
 }
 pub fn list_insights() -> Vec<Insight> {
-    INSIGHTS.lock().unwrap().clone()
+    INSIGHTS.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 pub fn get_dataset(id: &str) -> Result<DatasetMeta, String> {
     DATASETS
@@ -357,14 +397,17 @@ pub fn get_dataset(id: &str) -> Result<DatasetMeta, String> {
 }
 
 fn uuid_v4() -> String {
-    format!("cwd-{}", uuid::Uuid::new_v4())
+    format!("cwd-{}", crate::openhuman::util::uuid_v4())
 }
-fn now_epoch() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+
+pub fn delete_dataset(dataset_id: &str) -> Result<(), String> {
+    let mut store = DATASETS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    if store.remove(dataset_id).is_some() {
+        info!(dataset_id = %dataset_id, "[chat_with_data] dataset deleted");
+        Ok(())
+    } else {
+        Err(format!("dataset not found: {dataset_id}"))
+    }
 }
 
 #[cfg(test)]

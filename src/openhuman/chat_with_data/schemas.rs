@@ -52,6 +52,11 @@ const DEFS: &[Def] = &[
         schema: s_scan,
         handler: h_scan,
     },
+    Def {
+        function: "delete_dataset",
+        schema: s_delete,
+        handler: h_delete,
+    },
 ];
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -320,6 +325,9 @@ fn h_ingest(p: Map<String, Value>) -> ControllerFuture {
 fn h_scan(_p: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move { super::rpc::handle_scan_anomalies(_p).await })
 }
+fn h_delete(p: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move { super::rpc::handle_delete_dataset(p).await })
+}
 
 fn s_ingest() -> ControllerSchema {
     ControllerSchema {
@@ -380,13 +388,41 @@ fn s_scan() -> ControllerSchema {
     }
 }
 
+fn s_delete() -> ControllerSchema {
+    ControllerSchema {
+        namespace: "chat_with_data",
+        function: "delete_dataset",
+        description: "Remove a registered dataset.",
+        inputs: vec![FieldSchema {
+            name: "dataset_id",
+            ty: TypeSchema::String,
+            comment: "Dataset ID to delete.",
+            required: true,
+        }],
+        outputs: vec![
+            FieldSchema {
+                name: "ok",
+                ty: TypeSchema::Bool,
+                comment: "Success.",
+                required: true,
+            },
+            FieldSchema {
+                name: "deleted",
+                ty: TypeSchema::String,
+                comment: "Deleted dataset ID.",
+                required: true,
+            },
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn handlers_match() {
-        assert_eq!(all_controller_schemas().len(), 8);
-        assert_eq!(all_registered_controllers().len(), 8);
+        assert_eq!(all_controller_schemas().len(), 9);
+        assert_eq!(all_registered_controllers().len(), 9);
     }
     #[test]
     fn namespace() {

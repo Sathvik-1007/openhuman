@@ -5,12 +5,63 @@ use std::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use super::types::*;
+use crate::openhuman::util::now_epoch;
 
 /// Maximum stored intents before eviction.
 const MAX_INTENTS: usize = 200;
 
+/// Multi-turn context window (last N intents per session).
+const CONTEXT_WINDOW: usize = 5;
+
+/// Context timeout: 5 minutes of inactivity resets context.
+const CONTEXT_TIMEOUT_SECS: u64 = 300;
+
 static INTENTS: std::sync::LazyLock<Mutex<HashMap<String, VoiceIntent>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Per-session multi-turn context tracking.
+static CONTEXTS: std::sync::LazyLock<Mutex<HashMap<String, ActionContext>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Get or create a context for a session, returning recent intent IDs.
+pub fn get_context(session_id: &str) -> Vec<String> {
+    let mut store = CONTEXTS.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now_epoch();
+    if let Some(ctx) = store.get_mut(session_id) {
+        if now - ctx.last_active > CONTEXT_TIMEOUT_SECS {
+            // Context expired, reset.
+            ctx.intents.clear();
+        }
+        ctx.last_active = now;
+        ctx.intents
+            .iter()
+            .rev()
+            .take(CONTEXT_WINDOW)
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Record an intent in the session context.
+pub fn record_context(session_id: &str, intent_id: &str) {
+    let mut store = CONTEXTS.lock().unwrap_or_else(|e| e.into_inner());
+    let now = now_epoch();
+    let ctx = store
+        .entry(session_id.to_string())
+        .or_insert_with(|| ActionContext {
+            session_id: session_id.into(),
+            intents: Vec::new(),
+            last_active: now,
+        });
+    ctx.intents.push(intent_id.to_string());
+    ctx.last_active = now;
+    // Keep only last CONTEXT_WINDOW * 2 to avoid unbounded growth.
+    if ctx.intents.len() > CONTEXT_WINDOW * 2 {
+        ctx.intents.drain(..ctx.intents.len() - CONTEXT_WINDOW);
+    }
+}
 
 /// Built-in action mappings (keyword → controller action).
 static MAPPINGS: std::sync::LazyLock<Vec<ActionMapping>> = std::sync::LazyLock::new(|| {
@@ -128,9 +179,13 @@ pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
         result: None,
         error: None,
         created_at: now_epoch(),
+        context_history: Vec::new(),
     };
 
-    INTENTS.lock().unwrap().insert(id, intent.clone());
+    INTENTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, intent.clone());
     evict_old_intents();
     if intent.status == IntentStatus::Pending {
         warn!(action_id = %intent.id, "[voice_actions] confirmation required");
@@ -168,14 +223,18 @@ pub fn store_llm_intent(
         result: None,
         error: None,
         created_at: now_epoch(),
+        context_history: Vec::new(),
     };
-    INTENTS.lock().unwrap().insert(id, intent.clone());
+    INTENTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, intent.clone());
     intent
 }
 
 /// Confirm a pending intent (for actions requiring confirmation) and execute it.
 pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
-    let mut store = INTENTS.lock().unwrap();
+    let mut store = INTENTS.lock().unwrap_or_else(|e| e.into_inner());
     let intent = store
         .get_mut(intent_id)
         .ok_or_else(|| format!("intent not found: {intent_id}"))?;
@@ -189,7 +248,7 @@ pub fn confirm_intent(intent_id: &str) -> Result<VoiceIntent, String> {
 
 /// Reject a pending intent.
 pub fn reject_intent(intent_id: &str) -> Result<VoiceIntent, String> {
-    let mut store = INTENTS.lock().unwrap();
+    let mut store = INTENTS.lock().unwrap_or_else(|e| e.into_inner());
     let intent = store
         .get_mut(intent_id)
         .ok_or_else(|| format!("intent not found: {intent_id}"))?;
@@ -202,7 +261,7 @@ pub fn reject_intent(intent_id: &str) -> Result<VoiceIntent, String> {
 
 /// Mark intent as executed (called after controller dispatch succeeds).
 pub fn mark_executed(intent_id: &str, result: serde_json::Value) -> Result<VoiceIntent, String> {
-    let mut store = INTENTS.lock().unwrap();
+    let mut store = INTENTS.lock().unwrap_or_else(|e| e.into_inner());
     let intent = store
         .get_mut(intent_id)
         .ok_or_else(|| format!("intent not found: {intent_id}"))?;
@@ -216,7 +275,7 @@ pub fn mark_executed(intent_id: &str, result: serde_json::Value) -> Result<Voice
 
 /// Mark intent as failed.
 pub fn mark_failed(intent_id: &str, error: &str) -> Result<VoiceIntent, String> {
-    let mut store = INTENTS.lock().unwrap();
+    let mut store = INTENTS.lock().unwrap_or_else(|e| e.into_inner());
     let intent = store
         .get_mut(intent_id)
         .ok_or_else(|| format!("intent not found: {intent_id}"))?;
@@ -229,7 +288,7 @@ pub fn mark_failed(intent_id: &str, error: &str) -> Result<VoiceIntent, String> 
 pub fn get_intent(intent_id: &str) -> Result<VoiceIntent, String> {
     INTENTS
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get(intent_id)
         .cloned()
         .ok_or_else(|| format!("intent not found: {intent_id}"))
@@ -241,7 +300,7 @@ pub fn list_mappings() -> Vec<ActionMapping> {
 }
 
 fn evict_old_intents() {
-    let mut store = INTENTS.lock().unwrap();
+    let mut store = INTENTS.lock().unwrap_or_else(|e| e.into_inner());
     if store.len() <= MAX_INTENTS {
         return;
     }
@@ -275,15 +334,7 @@ fn extract_params(utterance: &str, mapping: &ActionMapping) -> serde_json::Value
 }
 
 fn uuid_v4() -> String {
-    format!("va-{}", uuid::Uuid::new_v4())
-}
-
-fn now_epoch() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    format!("va-{}", crate::openhuman::util::uuid_v4())
 }
 
 #[cfg(test)]

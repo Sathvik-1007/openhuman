@@ -6,12 +6,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use tracing::{debug, warn};
 
 use crate::openhuman::meet_agent::ops::{Vad, VadEvent};
+use crate::openhuman::util::now_epoch;
 
 use super::types::SessionState;
 
@@ -61,6 +61,18 @@ pub struct VoiceAssistantSession {
     pub last_activity: u64,
     /// True while a brain turn is in progress (prevents concurrent turns).
     pub processing_lock: bool,
+    /// Detected language from last STT pass (auto-detection).
+    pub detected_language: Option<String>,
+    /// Detected emotion/sentiment from last utterance.
+    pub detected_emotion: Option<String>,
+    /// Whether barge-in (interruption) is enabled.
+    pub barge_in_enabled: bool,
+    /// Count of interruptions in this session.
+    pub interrupt_count: u32,
+    /// Wake word phrase (if wake-word mode is active).
+    pub wake_word: Option<String>,
+    /// Streaming partial transcript (updated during chunked STT).
+    pub partial_transcript: String,
 }
 
 /// A single conversation turn (user said X, assistant replied Y).
@@ -95,15 +107,40 @@ impl VoiceAssistantSession {
             last_error: None,
             last_activity: now_epoch(),
             processing_lock: false,
+            detected_language: None,
+            detected_emotion: None,
+            barge_in_enabled: true,
+            interrupt_count: 0,
+            wake_word: None,
+            partial_transcript: String::new(),
         }
     }
 
     /// Push inbound PCM samples and run VAD. Returns the VAD event.
+    /// If barge-in is enabled and session is Speaking, detects speech and interrupts.
     pub fn push_inbound_pcm(&mut self, samples: &[i16]) -> VadEvent {
         self.last_activity = now_epoch();
         if samples.is_empty() {
             return VadEvent::Idle;
         }
+
+        // Barge-in: if we're speaking and detect user speech, interrupt immediately.
+        if self.barge_in_enabled && self.state == SessionState::Speaking {
+            let energy: f64 = samples
+                .iter()
+                .map(|&s| (s as f64) * (s as f64))
+                .sum::<f64>()
+                / samples.len() as f64;
+            // Threshold: ~-40dBFS for 16-bit audio (RMS ~100 = energy ~10000)
+            if energy > 10_000.0 {
+                debug!(
+                    "{LOG_PREFIX} barge-in detected (energy={energy:.0}), interrupting session={}",
+                    self.session_id
+                );
+                self.interrupt();
+            }
+        }
+
         // Enforce max buffer size.
         let remaining = MAX_INBOUND_SAMPLES.saturating_sub(self.inbound_pcm.len());
         let to_push = samples.len().min(remaining);
@@ -111,6 +148,20 @@ impl VoiceAssistantSession {
         self.inbound_samples += to_push;
 
         self.vad.feed(samples)
+    }
+
+    /// Interrupt the current TTS playback (barge-in).
+    /// Clears outbound buffer and transitions back to Listening.
+    pub fn interrupt(&mut self) -> usize {
+        let discarded = self.outbound_pcm.len();
+        self.outbound_pcm.clear();
+        self.state = SessionState::Listening;
+        self.interrupt_count += 1;
+        debug!(
+            "{LOG_PREFIX} interrupted session={} discarded={discarded} samples",
+            self.session_id
+        );
+        discarded
     }
 
     /// Drain the inbound PCM buffer (called by brain after VAD fires).
@@ -292,13 +343,6 @@ fn evict_idle_sessions(map: &mut HashMap<String, VoiceAssistantSession>) {
     if !expired.is_empty() {
         debug!("{LOG_PREFIX} evicted {} idle sessions", expired.len());
     }
-}
-
-fn now_epoch() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 #[cfg(test)]

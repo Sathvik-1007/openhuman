@@ -34,6 +34,8 @@ pub enum SqlGenMethod {
     Pattern,
     /// Template-based with slot filling.
     Template,
+    /// LLM-generated SQL from natural language.
+    Llm,
     /// Fallback generic query.
     Fallback,
 }
@@ -291,6 +293,127 @@ fn extract_time_filter(question: &str) -> Option<u32> {
     }
 
     None
+}
+
+/// Generate SQL from a natural language question using LLM.
+///
+/// This is the advanced path — sends the schema and question to the LLM
+/// and asks it to produce a valid SELECT query. The result is validated
+/// with sqlparser and safety-checked before returning.
+pub async fn generate_sql_via_llm(
+    table_name: &str,
+    columns: &[String],
+    question: &str,
+) -> Result<GeneratedSql, String> {
+    use crate::openhuman::inference::provider::create_chat_provider;
+    use crate::openhuman::inference::provider::traits::ChatMessage;
+
+    let config = crate::openhuman::config::ops::load_config_with_timeout()
+        .await
+        .map_err(|e| format!("[chat-with-data-sql] config load failed: {e}"))?;
+
+    let (provider, model) = create_chat_provider("agentic", &config)
+        .map_err(|e| format!("[chat-with-data-sql] LLM provider creation failed: {e}"))?;
+
+    let schema_desc = if columns.is_empty() {
+        format!("Table: {table_name} (columns unknown)")
+    } else {
+        format!("Table: {table_name}\nColumns: {}", columns.join(", "))
+    };
+
+    let system = format!(
+        "You are a SQL query generator. Given a table schema and a natural language question, \
+         produce a single valid SQLite SELECT query. Rules:\n\
+         - Only SELECT queries (no INSERT, UPDATE, DELETE, DROP, etc.)\n\
+         - No subqueries or UNION\n\
+         - No semicolons\n\
+         - Add LIMIT 100 unless the user asks for a specific count\n\
+         - Return ONLY the SQL query, nothing else — no explanation, no markdown\n\n\
+         Schema:\n{schema_desc}"
+    );
+
+    let messages = vec![ChatMessage::system(&system), ChatMessage::user(question)];
+
+    debug!(
+        question = %question,
+        table = %table_name,
+        "[chat-with-data-sql] LLM SQL generation request"
+    );
+
+    let raw_sql = provider
+        .chat_with_history(&messages, &model, 0.2)
+        .await
+        .map_err(|e| format!("[chat-with-data-sql] LLM request failed: {e}"))?;
+
+    // Clean up LLM output — strip markdown fences, trim whitespace.
+    let sql = raw_sql
+        .trim()
+        .trim_start_matches("```sql")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim()
+        .to_string();
+
+    // Validate safety.
+    if let Err(e) = is_safe_query(&sql) {
+        warn!(sql = %sql, error = %e, "[chat-with-data-sql] LLM generated unsafe SQL");
+        return Err(format!("LLM generated unsafe SQL: {e}"));
+    }
+
+    // Validate syntax.
+    let validation = validate_sql(&sql);
+    let is_valid = validation.is_ok();
+    let validation_error = validation.err();
+
+    if !is_valid {
+        warn!(
+            sql = %sql,
+            error = ?validation_error,
+            "[chat-with-data-sql] LLM generated invalid SQL"
+        );
+    } else {
+        debug!(sql = %sql, "[chat-with-data-sql] LLM SQL generated successfully");
+    }
+
+    // Determine columns used (best-effort from the SQL text).
+    let cols_used: Vec<String> = columns
+        .iter()
+        .filter(|c| sql.to_lowercase().contains(&c.to_lowercase()))
+        .cloned()
+        .collect();
+
+    Ok(GeneratedSql {
+        sql,
+        columns_used: cols_used,
+        is_valid,
+        validation_error,
+        method: SqlGenMethod::Llm,
+    })
+}
+
+/// Generate SQL with LLM fallback — tries patterns first, falls back to LLM
+/// if the pattern result is a generic fallback.
+pub async fn generate_sql_smart(
+    table_name: &str,
+    columns: &[String],
+    question: &str,
+) -> GeneratedSql {
+    let pattern_result = generate_sql_for_question(table_name, columns, question);
+
+    // If pattern matching produced a real result (not fallback), use it.
+    if pattern_result.method != SqlGenMethod::Fallback {
+        return pattern_result;
+    }
+
+    // Try LLM for complex queries that patterns can't handle.
+    match generate_sql_via_llm(table_name, columns, question).await {
+        Ok(llm_result) if llm_result.is_valid => llm_result,
+        Ok(_) | Err(_) => {
+            // LLM failed or produced invalid SQL — fall back to pattern result.
+            debug!("[chat-with-data-sql] LLM fallback failed, using pattern result");
+            pattern_result
+        }
+    }
 }
 
 /// Check if a SQL query contains dangerous operations.

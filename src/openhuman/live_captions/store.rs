@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use super::types::*;
+use crate::openhuman::util::now_epoch;
 
 /// Maximum transcripts before LRU eviction.
 const MAX_TRANSCRIPTS: usize = 100;
@@ -29,7 +30,7 @@ pub fn start_transcript(
         created_at: now,
         updated_at: now,
     };
-    let mut store = TRANSCRIPTS.lock().unwrap();
+    let mut store = TRANSCRIPTS.lock().unwrap_or_else(|e| e.into_inner());
     // Evict oldest completed transcripts if at capacity.
     if store.len() >= MAX_TRANSCRIPTS {
         let oldest = store
@@ -143,7 +144,12 @@ pub fn get_transcript(transcript_id: &str) -> Result<Transcript, String> {
 }
 
 pub fn list_transcripts() -> Vec<Transcript> {
-    TRANSCRIPTS.lock().unwrap().values().cloned().collect()
+    TRANSCRIPTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect()
 }
 
 /// Search transcripts by text content. Returns transcripts containing the query.
@@ -151,7 +157,7 @@ pub fn search_transcripts(query: &str) -> Vec<Transcript> {
     let lower_query = query.to_lowercase();
     TRANSCRIPTS
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .values()
         .filter(|t| {
             t.segments
@@ -167,22 +173,18 @@ pub fn search_transcripts(query: &str) -> Vec<Transcript> {
 
 /// Set summary directly (used when LLM generates the summary).
 pub fn set_summary(transcript_id: &str, summary: &str) {
-    if let Some(t) = TRANSCRIPTS.lock().unwrap().get_mut(transcript_id) {
+    if let Some(t) = TRANSCRIPTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(transcript_id)
+    {
         t.summary = Some(summary.to_string());
         t.updated_at = now_epoch();
     }
 }
 
 fn uuid_v4() -> String {
-    format!("lc-{}", uuid::Uuid::new_v4())
-}
-
-fn now_epoch() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    format!("lc-{}", crate::openhuman::util::uuid_v4())
 }
 
 #[cfg(test)]
