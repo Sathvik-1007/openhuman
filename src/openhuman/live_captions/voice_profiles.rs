@@ -1,16 +1,20 @@
 //! Voice profiles for speaker identification via audio embeddings.
+//! Profiles are persisted to JSON on disk to survive restarts.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const MAX_PROFILES: usize = 50;
 const EMBEDDING_DIM: usize = 13;
+const PROFILES_FILE: &str = "voice_profiles.json";
 
 static PROFILES: std::sync::LazyLock<Mutex<HashMap<String, VoiceProfile>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    std::sync::LazyLock::new(|| Mutex::new(load_profiles_from_disk()));
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceProfile {
     pub id: String,
     pub name: String,
@@ -35,6 +39,7 @@ pub fn register_profile(name: &str, samples: &[i16]) -> Result<String, String> {
         return Err("max profiles reached".into());
     }
     store.insert(id.clone(), profile);
+    save_profiles_to_disk(&store);
     info!("[voice-profiles] registered '{name}' id={id}");
     Ok(id)
 }
@@ -52,10 +57,10 @@ pub fn update_profile(profile_id: &str, samples: &[i16]) -> Result<(), String> {
         *val = (*val * n + new_emb[i]) / (n + 1.0);
     }
     p.sample_count += 1;
-    debug!(
-        "[voice-profiles] updated {} samples={}",
-        profile_id, p.sample_count
-    );
+    let count = p.sample_count;
+    drop(p);
+    save_profiles_to_disk(&store);
+    debug!("[voice-profiles] updated {} samples={}", profile_id, count);
     Ok(())
 }
 
@@ -86,12 +91,41 @@ pub fn list_profiles() -> Vec<(String, String, u32)> {
 }
 
 pub fn delete_profile(id: &str) -> Result<(), String> {
-    PROFILES
-        .lock()
-        .map_err(|e| format!("{e}"))?
-        .remove(id)
-        .map(|_| ())
-        .ok_or("not found".into())
+    let mut store = PROFILES.lock().map_err(|e| format!("{e}"))?;
+    store.remove(id).ok_or("not found".to_string())?;
+    save_profiles_to_disk(&store);
+    Ok(())
+}
+
+fn profiles_path() -> PathBuf {
+    let dir = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("openhuman");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(PROFILES_FILE)
+}
+
+fn load_profiles_from_disk() -> HashMap<String, VoiceProfile> {
+    let path = profiles_path();
+    match std::fs::read_to_string(&path) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_else(|e| {
+            warn!("[voice-profiles] failed to parse {}: {e}", path.display());
+            HashMap::new()
+        }),
+        Err(_) => HashMap::new(),
+    }
+}
+
+fn save_profiles_to_disk(store: &HashMap<String, VoiceProfile>) {
+    let path = profiles_path();
+    match serde_json::to_string_pretty(store) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                warn!("[voice-profiles] save failed: {e}");
+            }
+        }
+        Err(e) => warn!("[voice-profiles] serialize failed: {e}"),
+    }
 }
 
 fn extract_embedding(samples: &[i16]) -> Vec<f32> {

@@ -36,7 +36,7 @@ controller-registry RPC exposure, LLM fallback paths, and safety validation.
 
 - **Barge-in / Interruption** (`session.rs`): Auto-detects speech during TTS playback (energy > -40dBFS threshold). Clears outbound buffer, transitions to Listening.
 - **Streaming STT** (`brain.rs`): LocalAgreement-2 chunked approach for audio > 4s. Processes in 2s overlapping windows, emits confirmed partial transcripts. ~3s latency vs 30s for batch.
-- **Multi-Language Detection** (`brain.rs`): Unicode script analysis per utterance: CJK→zh, Cyrillic→ru, Arabic→ar, Devanagari→hi, Latin diacritics→es/de/fr.
+- **Multi-Language Detection** (`brain.rs`): Trigram-based detection via `whatlang` crate — 69 languages with confidence scoring. Auto-switches session language when confidence > 0.5.
 - **Emotion Detection** (`brain.rs`): Keyword heuristics: urgent/negative/confused/positive. Stored on session as `detected_emotion`.
 - **WebSocket Streaming** (`ws_transport.rs`): Binary bidirectional WebSocket at `/ws/voice/{session_id}`. Client sends PCM16LE frames, server sends TTS PCM + JSON status. Eliminates polling overhead (~10ms vs ~100ms).
 - **Wake Word Detection** (`wake_word.rs`): Energy-based keyword spotting for hands-free activation.
@@ -304,7 +304,7 @@ E2E: `cargo test --test json_rpc_e2e`
 
 ### Noise Cancellation (`voice_assistant/noise_cancel.rs`)
 
-Spectral subtraction noise reduction + NLMS adaptive echo cancellation.
+Neural noise suppression via `nnnoiseless` (pure-Rust RNNoise port) + NLMS adaptive echo cancellation.
 Configurable strength (0.0–1.0), filter length, and step size.
 Maintains per-session state for continuous noise floor estimation.
 
@@ -338,7 +338,7 @@ inactivity timeout. Enables contextual follow-up commands.
 
 ### Streaming TTS (`voice_assistant/brain.rs`)
 
-Sentence-level chunking of LLM replies with progressive TTS synthesis
+Sentence-level chunking of LLM replies (via `unicode-segmentation` UAX#29 boundaries) with progressive TTS synthesis
 and enqueue. Playback starts before full reply is synthesized.
 Barge-in detection between chunks stops synthesis early.
 

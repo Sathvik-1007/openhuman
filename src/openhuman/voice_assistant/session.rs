@@ -300,6 +300,7 @@ impl SessionRegistry {
 
     /// Stop and remove a session. Returns the final session state.
     pub fn stop(session_id: &str) -> Result<VoiceAssistantSession, String> {
+        super::brain::evict_nc_state(session_id);
         let mut map = registry_map()
             .lock()
             .map_err(|e| format!("{LOG_PREFIX} lock poisoned: {e}"))?;

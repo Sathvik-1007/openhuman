@@ -1,14 +1,15 @@
 //! Noise and echo cancellation for voice assistant audio.
 //!
-//! Spectral subtraction for noise reduction + NLMS adaptive filter for echo cancellation.
+//! Uses nnnoiseless (pure-Rust RNNoise port) for neural noise suppression
+//! + NLMS adaptive filter for echo cancellation.
 
+use nnnoiseless::DenoiseState;
 use tracing::debug;
 
 const LOG_PREFIX: &str = "[voice-noise-cancel]";
 
 #[derive(Debug, Clone)]
 pub struct NoiseCancelConfig {
-    pub noise_reduction_strength: f32,
     pub echo_cancel_enabled: bool,
     pub echo_filter_len: usize,
     pub nlms_step: f32,
@@ -17,7 +18,6 @@ pub struct NoiseCancelConfig {
 impl Default for NoiseCancelConfig {
     fn default() -> Self {
         Self {
-            noise_reduction_strength: 0.5,
             echo_cancel_enabled: true,
             echo_filter_len: 256,
             nlms_step: 0.1,
@@ -27,10 +27,13 @@ impl Default for NoiseCancelConfig {
 
 pub struct NoiseCancelState {
     config: NoiseCancelConfig,
-    noise_floor: f32,
+    denoise: Box<DenoiseState<'static>>,
     echo_weights: Vec<f32>,
     reference_buf: Vec<f32>,
     frame_count: u64,
+    first_frame: bool,
+    /// Last VAD probability from RNNoise (0.0 = silence, 1.0 = speech).
+    pub vad_prob: f32,
 }
 
 impl NoiseCancelState {
@@ -38,22 +41,32 @@ impl NoiseCancelState {
         let filter_len = config.echo_filter_len;
         Self {
             config,
-            noise_floor: 0.0,
+            denoise: DenoiseState::new(),
             echo_weights: vec![0.0; filter_len],
             reference_buf: Vec::new(),
             frame_count: 0,
+            first_frame: true,
+            vad_prob: 0.0,
         }
     }
 
-    /// Process mic input with noise reduction and optional echo cancellation.
+    /// Process mic input with RNNoise denoising and optional echo cancellation.
+    /// Input is 16kHz i16 PCM. Internally upsamples to 48kHz for RNNoise.
     pub fn process(&mut self, input: &[i16], reference: Option<&[i16]>) -> Vec<i16> {
         self.frame_count += 1;
-        let mut samples: Vec<f32> = input.iter().map(|&s| s as f32).collect();
 
-        if self.config.noise_reduction_strength > 0.0 {
-            samples = self.reduce_noise(&samples);
-        }
+        // Upsample 16kHz → 48kHz (3x linear interpolation)
+        let upsampled = upsample_3x(input);
 
+        // Process through RNNoise in FRAME_SIZE (480) chunks
+        let denoised = self.denoise_frames(&upsampled);
+
+        // Downsample 48kHz → 16kHz (take every 3rd sample)
+        let mut samples: Vec<f32> = denoised.iter().step_by(3).copied().collect();
+        // Trim to original length
+        samples.truncate(input.len());
+
+        // Echo cancellation (operates at 16kHz)
         if self.config.echo_cancel_enabled {
             if let Some(ref_signal) = reference {
                 samples = self.cancel_echo(&samples, ref_signal);
@@ -66,21 +79,35 @@ impl NoiseCancelState {
             .collect()
     }
 
-    fn reduce_noise(&mut self, samples: &[f32]) -> Vec<f32> {
-        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-        if self.frame_count < 10 || rms < self.noise_floor * 1.5 {
-            self.noise_floor = self.noise_floor * 0.95 + rms * 0.05;
+    fn denoise_frames(&mut self, samples_48k: &[f32]) -> Vec<f32> {
+        let frame_size = DenoiseState::FRAME_SIZE; // 480
+        let mut output = Vec::with_capacity(samples_48k.len());
+        let mut out_buf = [0.0f32; 480];
+
+        for chunk in samples_48k.chunks(frame_size) {
+            if chunk.len() == frame_size {
+                self.vad_prob = self.denoise.process_frame(&mut out_buf, chunk);
+                // Discard first frame (contains fade-in artifacts)
+                if self.first_frame {
+                    self.first_frame = false;
+                    output.extend_from_slice(&[0.0f32; 480]);
+                } else {
+                    output.extend_from_slice(&out_buf);
+                }
+            } else {
+                // Pad last chunk with zeros
+                let mut padded = vec![0.0f32; frame_size];
+                padded[..chunk.len()].copy_from_slice(chunk);
+                self.vad_prob = self.denoise.process_frame(&mut out_buf, &padded);
+                if self.first_frame {
+                    self.first_frame = false;
+                    output.extend_from_slice(&out_buf[..chunk.len()]);
+                } else {
+                    output.extend_from_slice(&out_buf[..chunk.len()]);
+                }
+            }
         }
-        let threshold = self.noise_floor * (1.0 + self.config.noise_reduction_strength * 2.0);
-        let gain = if rms > threshold {
-            1.0
-        } else {
-            (rms / threshold).max(0.05)
-        };
-        if gain < 1.0 {
-            debug!("{LOG_PREFIX} noise gate gain={:.2}", gain);
-        }
-        samples.iter().map(|&s| s * gain).collect()
+        output
     }
 
     fn cancel_echo(&mut self, input: &[f32], reference: &[i16]) -> Vec<f32> {
@@ -132,29 +159,73 @@ impl NoiseCancelState {
     }
 }
 
+/// Upsample by 3x using linear interpolation (16kHz → 48kHz).
+fn upsample_3x(input: &[i16]) -> Vec<f32> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(input.len() * 3);
+    for i in 0..input.len() - 1 {
+        let a = input[i] as f32;
+        let b = input[i + 1] as f32;
+        out.push(a);
+        out.push(a + (b - a) / 3.0);
+        out.push(a + (b - a) * 2.0 / 3.0);
+    }
+    // Last sample (safe: early return guarantees non-empty)
+    let last = input[input.len() - 1] as f32;
+    out.push(last);
+    out.push(last);
+    out.push(last);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn silence_is_gated() {
+    fn denoises_without_panic() {
         let mut state = NoiseCancelState::new(NoiseCancelConfig::default());
-        for _ in 0..15 {
+        // Feed enough frames to get past the first-frame discard
+        for _ in 0..5 {
+            state.process(&vec![100i16; 160], None);
+        }
+        let out = state.process(&vec![5000i16; 160], None);
+        assert_eq!(out.len(), 160);
+    }
+
+    #[test]
+    fn silence_is_suppressed() {
+        let mut state = NoiseCancelState::new(NoiseCancelConfig::default());
+        // Process several frames of low-level noise
+        for _ in 0..20 {
             state.process(&vec![10i16; 160], None);
         }
         let out = state.process(&vec![5i16; 160], None);
         let rms: f32 =
             (out.iter().map(|&s| (s as f32).powi(2)).sum::<f32>() / out.len() as f32).sqrt();
-        assert!(rms <= 10.0);
+        // RNNoise should suppress low-level noise significantly
+        assert!(rms < 50.0, "RMS was {rms}, expected < 50 for noise");
     }
 
     #[test]
-    fn loud_passes() {
+    fn loud_signal_passes() {
         let mut state = NoiseCancelState::new(NoiseCancelConfig::default());
-        for _ in 0..15 {
-            state.process(&vec![10i16; 160], None);
+        for _ in 0..5 {
+            state.process(&vec![100i16; 160], None);
         }
-        let out = state.process(&vec![5000i16; 160], None);
-        assert!(out.iter().all(|&s| s > 1000));
+        // A loud signal (speech-like) should mostly pass through
+        let loud: Vec<i16> = (0..160)
+            .map(|i| ((i as f32 * 0.1).sin() * 10000.0) as i16)
+            .collect();
+        let out = state.process(&loud, None);
+        let out_rms: f32 =
+            (out.iter().map(|&s| (s as f32).powi(2)).sum::<f32>() / out.len() as f32).sqrt();
+        // Should retain significant energy for speech-like signals
+        assert!(
+            out_rms > 100.0,
+            "RMS was {out_rms}, expected > 100 for speech"
+        );
     }
 }

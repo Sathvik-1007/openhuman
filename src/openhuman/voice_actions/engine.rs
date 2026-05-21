@@ -16,6 +16,9 @@ const CONTEXT_WINDOW: usize = 5;
 /// Context timeout: 5 minutes of inactivity resets context.
 const CONTEXT_TIMEOUT_SECS: u64 = 300;
 
+/// Maximum tracked sessions in CONTEXTS before LRU eviction.
+const MAX_CONTEXTS: usize = 128;
+
 static INTENTS: std::sync::LazyLock<Mutex<HashMap<String, VoiceIntent>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -27,6 +30,30 @@ static CONTEXTS: std::sync::LazyLock<Mutex<HashMap<String, ActionContext>>> =
 pub fn get_context(session_id: &str) -> Vec<String> {
     let mut store = CONTEXTS.lock().unwrap_or_else(|e| e.into_inner());
     let now = now_epoch();
+    // True LRU: evict oldest sessions when over limit.
+    if store.len() > MAX_CONTEXTS {
+        // First pass: remove stale (timed out).
+        let stale: Vec<String> = store
+            .iter()
+            .filter(|(_, ctx)| now - ctx.last_active > CONTEXT_TIMEOUT_SECS)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &stale {
+            store.remove(k);
+        }
+        // Second pass: if still over limit, evict oldest by last_active.
+        while store.len() > MAX_CONTEXTS {
+            if let Some(oldest_key) = store
+                .iter()
+                .min_by_key(|(_, ctx)| ctx.last_active)
+                .map(|(k, _)| k.clone())
+            {
+                store.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
+    }
     if let Some(ctx) = store.get_mut(session_id) {
         if now - ctx.last_active > CONTEXT_TIMEOUT_SECS {
             // Context expired, reset.
