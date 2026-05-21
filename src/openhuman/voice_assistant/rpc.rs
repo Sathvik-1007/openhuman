@@ -11,7 +11,6 @@
 //! Each handler is short — heavy lifting lives in `session.rs` (state)
 //! and `brain.rs` (behavior).
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::{json, Map, Value};
 use tracing::info;
 
@@ -21,6 +20,7 @@ use super::brain;
 use super::session::SessionRegistry;
 use super::types::*;
 use crate::openhuman::meet_agent::ops::VadEvent;
+use crate::openhuman::meet_agent::wav::decode_pcm16le_b64;
 
 const LOG_PREFIX: &str = "[voice-assistant-rpc]";
 
@@ -68,8 +68,7 @@ pub async fn handle_push_audio(params: Map<String, Value>) -> Result<Value, Stri
     let turn_started = matches!(event, VadEvent::EndOfUtterance);
     if turn_started {
         // Acquire processing lock to prevent concurrent turns.
-        let acquired = SessionRegistry::try_acquire_processing(&req.session_id)
-            .unwrap_or(false);
+        let acquired = SessionRegistry::try_acquire_processing(&req.session_id).unwrap_or(false);
         if acquired {
             let session_id = req.session_id.clone();
             tokio::spawn(async move {
@@ -87,7 +86,10 @@ pub async fn handle_push_audio(params: Map<String, Value>) -> Result<Value, Stri
                 SessionRegistry::release_processing(&session_id);
             });
         } else {
-            tracing::debug!("{LOG_PREFIX} skipping turn — already processing session={}", req.session_id);
+            tracing::debug!(
+                "{LOG_PREFIX} skipping turn — already processing session={}",
+                req.session_id
+            );
         }
     }
 
@@ -180,26 +182,10 @@ pub async fn handle_stop_session(params: Map<String, Value>) -> Result<Value, St
     .into_cli_compatible_json()
 }
 
-/// Decode a base64 string of PCM16LE bytes into samples.
-fn decode_pcm16le_b64(b64: &str) -> Result<Vec<i16>, String> {
-    if b64.is_empty() {
-        return Ok(Vec::new());
-    }
-    let bytes = B64
-        .decode(b64.as_bytes())
-        .map_err(|e| format!("base64: {e}"))?;
-    if bytes.len() % 2 != 0 {
-        return Err(format!("odd byte length {}", bytes.len()));
-    }
-    Ok(bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
     fn b64_pcm(samples: &[i16]) -> String {
         let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();

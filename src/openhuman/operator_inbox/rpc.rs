@@ -16,7 +16,9 @@ pub async fn handle_triage_message(p: Map<String, Value>) -> Result<Value, Strin
 
     // Reject messages where all content fields are empty.
     if sender.is_empty() && subject.is_empty() && body.is_empty() {
-        return Ok(json!({"ok": false, "error": "at least one of sender, subject, or body is required"}));
+        return Ok(
+            json!({"ok": false, "error": "at least one of sender, subject, or body is required"}),
+        );
     }
 
     // Primary path: LLM-powered triage for intelligent prioritization.

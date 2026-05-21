@@ -381,33 +381,10 @@ async fn llm_meeting(prompt: &str, history: &[ConversationTurn]) -> Result<Strin
 /// leak from a chat-completions response (markdown asterisks, fenced
 /// code, leading bullets). Keep punctuation that affects prosody
 /// (commas, periods, question marks) intact.
+///
+/// Shared implementation lives in `wav::strip_for_speech`.
 fn strip_for_speech(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_code = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            continue;
-        }
-        let cleaned: String = trimmed
-            .trim_start_matches(|c: char| c == '-' || c == '*' || c == '#' || c == '>')
-            .trim()
-            .chars()
-            .filter(|c| !matches!(c, '*' | '`' | '_' | '#'))
-            .collect();
-        if cleaned.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(&cleaned);
-    }
-    out.trim().to_string()
+    wav::strip_for_speech(text)
 }
 
 /// One rolling-history entry handed to the LLM.

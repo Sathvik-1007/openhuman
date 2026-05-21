@@ -13,7 +13,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use tracing::{debug, info, warn};
 
 use crate::openhuman::config::Config;
-use crate::openhuman::meet_agent::wav::pack_pcm16le_mono_wav;
+use crate::openhuman::meet_agent::wav::{pack_pcm16le_mono_wav, strip_for_speech};
 use crate::openhuman::voice::factory::{create_stt_provider, create_tts_provider};
 
 use super::session::SessionRegistry;
@@ -250,36 +250,6 @@ fn truncate(s: &str, max: usize) -> &str {
         let end = s.floor_char_boundary(max);
         &s[..end]
     }
-}
-
-/// Strip characters that sound bad when read aloud by TTS.
-fn strip_for_speech(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_code = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            continue;
-        }
-        let cleaned: String = trimmed
-            .trim_start_matches(|c: char| c == '-' || c == '*' || c == '#' || c == '>')
-            .trim()
-            .chars()
-            .filter(|c| !matches!(c, '*' | '`' | '_' | '#'))
-            .collect();
-        if cleaned.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(&cleaned);
-    }
-    out
 }
 
 #[cfg(test)]

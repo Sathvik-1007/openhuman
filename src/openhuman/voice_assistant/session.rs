@@ -186,6 +186,21 @@ impl SessionRegistry {
         tts_provider: &str,
         language: Option<&str>,
     ) -> Result<(), String> {
+        // Validate session_id (same rules as meet_agent::ops::sanitize_request_id)
+        let trimmed = session_id.trim();
+        if trimmed.is_empty() {
+            return Err("session_id must not be empty".into());
+        }
+        if trimmed.len() > 64 {
+            return Err("session_id exceeds 64 characters".into());
+        }
+        if !trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err("session_id contains forbidden characters".into());
+        }
+
         let mut map = registry_map()
             .lock()
             .map_err(|e| format!("{LOG_PREFIX} lock poisoned: {e}"))?;

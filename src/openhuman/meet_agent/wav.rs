@@ -1,13 +1,60 @@
-//! Tiny PCM16LE → WAV-container wrapper used to ship audio batches to
-//! the backend Whisper endpoint.
+//! Shared audio utilities — PCM encoding, WAV container, text-for-speech
+//! cleanup.
 //!
-//! `voice::cloud_transcribe` takes whatever the desktop UI captured
-//! (typically `audio/webm`) and forwards bytes to the backend. Our
-//! call buffers are raw PCM16LE @ 16 kHz mono — Whisper accepts WAV
-//! natively, so we wrap the bytes in a minimal RIFF/WAVE header and
-//! mark the upload as `audio/wav`. No other transcoding needed.
+//! Used by both `meet_agent` and `voice_assistant` domains.
+
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
 const WAV_HEADER_LEN: usize = 44;
+
+/// Decode a base64 string of PCM16LE bytes into samples. Empty input is
+/// a "heartbeat" push (no audio this tick) and yields an empty Vec.
+pub fn decode_pcm16le_b64(b64: &str) -> Result<Vec<i16>, String> {
+    if b64.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bytes = B64
+        .decode(b64.as_bytes())
+        .map_err(|e| format!("base64: {e}"))?;
+    if bytes.len() % 2 != 0 {
+        return Err(format!("odd byte length {}", bytes.len()));
+    }
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .collect())
+}
+
+/// Strip characters that sound bad when read aloud by TTS.
+/// Removes markdown fences, bullet markers, and inline formatting.
+pub fn strip_for_speech(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_code = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        let cleaned: String = trimmed
+            .trim_start_matches(|c: char| c == '-' || c == '*' || c == '#' || c == '>')
+            .trim()
+            .chars()
+            .filter(|c| !matches!(c, '*' | '`' | '_' | '#'))
+            .collect();
+        if cleaned.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&cleaned);
+    }
+    out.trim().to_string()
+}
 
 /// Produce a complete WAV file (header + interleaved PCM16LE samples).
 /// Caller passes the raw `i16` slice and the sample rate; mono is
@@ -75,5 +122,40 @@ mod tests {
         // -1 in i16 LE → 0xFF, 0xFF.
         assert_eq!(bytes[46], 0xFF);
         assert_eq!(bytes[47], 0xFF);
+    }
+
+    #[test]
+    fn decode_pcm16le_b64_roundtrip() {
+        let samples: Vec<i16> = vec![100, -200, 32767, -32768];
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let encoded = B64.encode(bytes);
+        assert_eq!(decode_pcm16le_b64(&encoded).unwrap(), samples);
+    }
+
+    #[test]
+    fn decode_pcm16le_b64_empty_is_heartbeat() {
+        assert_eq!(decode_pcm16le_b64("").unwrap(), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn decode_pcm16le_b64_odd_bytes_rejected() {
+        let encoded = B64.encode([0x01, 0x02, 0x03]);
+        assert!(decode_pcm16le_b64(&encoded).is_err());
+    }
+
+    #[test]
+    fn strip_for_speech_removes_markdown() {
+        let input = "## Hello\n- **world**\n```rust\ncode\n```\n> quote";
+        let out = strip_for_speech(input);
+        assert!(!out.contains('#'));
+        assert!(!out.contains('*'));
+        assert!(!out.contains("code"));
+        assert!(out.contains("Hello"));
+        assert!(out.contains("world"));
+    }
+
+    #[test]
+    fn strip_for_speech_empty_input() {
+        assert_eq!(strip_for_speech(""), "");
     }
 }

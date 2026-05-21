@@ -11,7 +11,6 @@
 //! `session.rs` (state) and `brain.rs` (behavior). RPC code is
 //! deserialize-validate-dispatch only.
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::{json, Map, Value};
 
 use crate::rpc::RpcOutcome;
@@ -23,6 +22,7 @@ use super::types::{
     PollSpeechRequest, PushCaptionRequest, PushListenPcmRequest, StartSessionRequest,
     StopSessionRequest,
 };
+use super::wav::decode_pcm16le_b64;
 
 const LOG_PREFIX: &str = "[meet-agent-rpc]";
 
@@ -155,27 +155,10 @@ pub async fn handle_stop_session(params: Map<String, Value>) -> Result<Value, St
     .into_cli_compatible_json()
 }
 
-/// Decode a base64 string of PCM16LE bytes into samples. Empty input is
-/// a "heartbeat" push (no audio this tick) and yields an empty Vec.
-fn decode_pcm16le_b64(b64: &str) -> Result<Vec<i16>, String> {
-    if b64.is_empty() {
-        return Ok(Vec::new());
-    }
-    let bytes = B64
-        .decode(b64.as_bytes())
-        .map_err(|e| format!("base64: {e}"))?;
-    if !bytes.len().is_multiple_of(2) {
-        return Err(format!("odd byte length {}", bytes.len()));
-    }
-    Ok(bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
     fn b64_pcm(samples: &[i16]) -> String {
         let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
