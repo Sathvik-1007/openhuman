@@ -6,9 +6,10 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::openhuman::meet_agent::ops::{Vad, VadEvent};
 
@@ -24,6 +25,12 @@ const MAX_OUTBOUND_SAMPLES: usize = 16_000 * 30;
 
 /// Maximum conversation history entries.
 const MAX_HISTORY: usize = 50;
+
+/// Maximum concurrent sessions before LRU eviction.
+const MAX_SESSIONS: usize = 32;
+
+/// Session idle timeout: 10 minutes without activity.
+const SESSION_IDLE_TIMEOUT_SECS: u64 = 600;
 
 /// A single voice assistant session.
 pub struct VoiceAssistantSession {
@@ -50,6 +57,10 @@ pub struct VoiceAssistantSession {
     pub history: Vec<ConversationTurn>,
     /// Last error from brain turn (if any). Cleared on next successful turn.
     pub last_error: Option<String>,
+    /// Epoch seconds of last activity (push_audio, poll, etc.).
+    pub last_activity: u64,
+    /// True while a brain turn is in progress (prevents concurrent turns).
+    pub processing_lock: bool,
 }
 
 /// A single conversation turn (user said X, assistant replied Y).
@@ -82,11 +93,14 @@ impl VoiceAssistantSession {
             last_reply: String::new(),
             history: Vec::new(),
             last_error: None,
+            last_activity: now_epoch(),
+            processing_lock: false,
         }
     }
 
     /// Push inbound PCM samples and run VAD. Returns the VAD event.
     pub fn push_inbound_pcm(&mut self, samples: &[i16]) -> VadEvent {
+        self.last_activity = now_epoch();
         if samples.is_empty() {
             return VadEvent::Idle;
         }
@@ -114,6 +128,7 @@ impl VoiceAssistantSession {
 
     /// Poll outbound PCM. Returns (base64_pcm, utterance_done).
     pub fn poll_outbound(&mut self) -> (String, bool) {
+        self.last_activity = now_epoch();
         if self.outbound_pcm.is_empty() {
             return (String::new(), self.state != SessionState::Speaking);
         }
@@ -164,7 +179,7 @@ fn registry_map() -> &'static Mutex<HashMap<String, VoiceAssistantSession>> {
 pub struct SessionRegistry;
 
 impl SessionRegistry {
-    /// Start a new session. Returns error if session_id already exists.
+    /// Start a new session. Evicts idle sessions if at capacity.
     pub fn start(
         session_id: &str,
         stt_provider: &str,
@@ -178,6 +193,19 @@ impl SessionRegistry {
             // Idempotent restart: close old, open new.
             debug!("{LOG_PREFIX} restarting existing session={session_id}");
             map.remove(session_id);
+        }
+        // Evict expired sessions and enforce max capacity.
+        evict_idle_sessions(&mut map);
+        if map.len() >= MAX_SESSIONS {
+            // Evict the least recently active session.
+            if let Some(lru_id) = map
+                .values()
+                .min_by_key(|s| s.last_activity)
+                .map(|s| s.session_id.clone())
+            {
+                warn!("{LOG_PREFIX} evicting LRU session={lru_id} (at capacity {MAX_SESSIONS})");
+                map.remove(&lru_id);
+            }
         }
         let session = VoiceAssistantSession::new(
             session_id.to_string(),
@@ -212,6 +240,50 @@ impl SessionRegistry {
         map.remove(session_id)
             .ok_or_else(|| format!("{LOG_PREFIX} session not found: {session_id}"))
     }
+
+    /// Try to acquire the processing lock for a session.
+    /// Returns false if a turn is already in progress.
+    pub fn try_acquire_processing(session_id: &str) -> Result<bool, String> {
+        Self::with_session(session_id, |s| {
+            if s.processing_lock {
+                false
+            } else {
+                s.processing_lock = true;
+                true
+            }
+        })
+    }
+
+    /// Release the processing lock for a session.
+    pub fn release_processing(session_id: &str) {
+        let _ = Self::with_session(session_id, |s| {
+            s.processing_lock = false;
+        });
+    }
+}
+
+/// Remove sessions that have been idle longer than the timeout.
+fn evict_idle_sessions(map: &mut HashMap<String, VoiceAssistantSession>) {
+    let now = now_epoch();
+    let expired: Vec<String> = map
+        .iter()
+        .filter(|(_, s)| now.saturating_sub(s.last_activity) > SESSION_IDLE_TIMEOUT_SECS)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in &expired {
+        debug!("{LOG_PREFIX} evicting idle session={id}");
+        map.remove(id);
+    }
+    if !expired.is_empty() {
+        debug!("{LOG_PREFIX} evicted {} idle sessions", expired.len());
+    }
+}
+
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]

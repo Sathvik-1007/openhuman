@@ -6,6 +6,9 @@ use tracing::{debug, info, warn};
 
 use super::types::*;
 
+/// Maximum stored intents before eviction.
+const MAX_INTENTS: usize = 200;
+
 static INTENTS: std::sync::LazyLock<Mutex<HashMap<String, VoiceIntent>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -128,6 +131,7 @@ pub fn recognize_intent(utterance: &str) -> Result<VoiceIntent, String> {
     };
 
     INTENTS.lock().unwrap().insert(id, intent.clone());
+    evict_old_intents();
     if intent.status == IntentStatus::Pending {
         warn!(action_id = %intent.id, "[voice_actions] confirmation required");
     }
@@ -234,6 +238,29 @@ pub fn get_intent(intent_id: &str) -> Result<VoiceIntent, String> {
 /// List all registered action mappings.
 pub fn list_mappings() -> Vec<ActionMapping> {
     MAPPINGS.clone()
+}
+
+fn evict_old_intents() {
+    let mut store = INTENTS.lock().unwrap();
+    if store.len() <= MAX_INTENTS {
+        return;
+    }
+    // Remove oldest executed/failed/rejected intents first.
+    let removable: Vec<String> = store
+        .iter()
+        .filter(|(_, i)| {
+            matches!(
+                i.status,
+                IntentStatus::Executed | IntentStatus::Failed | IntentStatus::Rejected
+            )
+        })
+        .min_by_key(|(_, i)| i.created_at)
+        .map(|(id, _)| id.clone())
+        .into_iter()
+        .collect();
+    for id in removable {
+        store.remove(&id);
+    }
 }
 
 fn extract_params(utterance: &str, mapping: &ActionMapping) -> serde_json::Value {

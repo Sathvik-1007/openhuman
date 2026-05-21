@@ -2,9 +2,12 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::types::*;
+
+/// Maximum transcripts before LRU eviction.
+const MAX_TRANSCRIPTS: usize = 100;
 
 static TRANSCRIPTS: std::sync::LazyLock<Mutex<HashMap<String, Transcript>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -26,7 +29,20 @@ pub fn start_transcript(
         created_at: now,
         updated_at: now,
     };
-    TRANSCRIPTS.lock().unwrap().insert(tid, t.clone());
+    let mut store = TRANSCRIPTS.lock().unwrap();
+    // Evict oldest completed transcripts if at capacity.
+    if store.len() >= MAX_TRANSCRIPTS {
+        let oldest = store
+            .iter()
+            .filter(|(_, t)| t.state == TranscriptState::Completed)
+            .min_by_key(|(_, t)| t.updated_at)
+            .map(|(id, _)| id.clone());
+        if let Some(old_id) = oldest {
+            warn!(evicted = %old_id, "[live_captions] evicting oldest transcript (at capacity)");
+            store.remove(&old_id);
+        }
+    }
+    store.insert(tid, t.clone());
     info!(transcript_id = %t.id, "[live_captions] transcript started");
     t
 }

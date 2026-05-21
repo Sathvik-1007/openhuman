@@ -67,22 +67,28 @@ pub async fn handle_push_audio(params: Map<String, Value>) -> Result<Value, Stri
 
     let turn_started = matches!(event, VadEvent::EndOfUtterance);
     if turn_started {
-        let session_id = req.session_id.clone();
-        tokio::spawn(async move {
-            if let Err(err) = brain::run_turn(&session_id).await {
-                tracing::warn!("{LOG_PREFIX} brain turn failed session={session_id} err={err}");
-                // Store error in session so get_status reveals it to the caller.
-                let _ = SessionRegistry::with_session(&session_id, |s| {
-                    s.last_error = Some(err.clone());
-                    s.state = super::types::SessionState::Listening;
-                });
-            } else {
-                // Clear any previous error on success.
-                let _ = SessionRegistry::with_session(&session_id, |s| {
-                    s.last_error = None;
-                });
-            }
-        });
+        // Acquire processing lock to prevent concurrent turns.
+        let acquired = SessionRegistry::try_acquire_processing(&req.session_id)
+            .unwrap_or(false);
+        if acquired {
+            let session_id = req.session_id.clone();
+            tokio::spawn(async move {
+                if let Err(err) = brain::run_turn(&session_id).await {
+                    tracing::warn!("{LOG_PREFIX} brain turn failed session={session_id} err={err}");
+                    let _ = SessionRegistry::with_session(&session_id, |s| {
+                        s.last_error = Some(err.clone());
+                        s.state = super::types::SessionState::Listening;
+                    });
+                } else {
+                    let _ = SessionRegistry::with_session(&session_id, |s| {
+                        s.last_error = None;
+                    });
+                }
+                SessionRegistry::release_processing(&session_id);
+            });
+        } else {
+            tracing::debug!("{LOG_PREFIX} skipping turn — already processing session={}", req.session_id);
+        }
     }
 
     RpcOutcome::new(
