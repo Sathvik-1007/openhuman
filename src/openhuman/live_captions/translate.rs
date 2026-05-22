@@ -60,7 +60,9 @@ impl TranslationPair {
 
     /// Parse from source/target language codes (ISO 639-1).
     pub fn from_codes(src: &str, tgt: &str) -> Option<Self> {
-        match (src, tgt) {
+        let src = src.trim().to_ascii_lowercase();
+        let tgt = tgt.trim().to_ascii_lowercase();
+        match (src.as_str(), tgt.as_str()) {
             ("en", "es") => Some(Self::EnEs),
             ("en", "fr") => Some(Self::EnFr),
             ("en", "de") => Some(Self::EnDe),

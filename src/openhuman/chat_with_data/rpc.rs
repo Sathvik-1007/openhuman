@@ -50,7 +50,10 @@ pub async fn handle_query(p: Map<String, Value>) -> Result<Value, String> {
     debug!(dataset_id = %id, question_len = question.len(), "[chat_with_data] query RPC");
 
     // Get dataset schema for context.
-    let ds = engine::get_dataset(id)?;
+    let ds = match engine::get_dataset(id) {
+        Ok(d) => d,
+        Err(e) => return Ok(json!({"ok": false, "error": e})),
+    };
 
     // Try LLM-powered SQL generation for complex queries.
     let pattern_result = sql_gen::generate_sql_for_question(&ds.id, &ds.columns, question);

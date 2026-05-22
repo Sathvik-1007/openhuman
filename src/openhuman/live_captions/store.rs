@@ -46,6 +46,9 @@ pub fn start_transcript(
             store.remove(&old_id);
         }
     }
+    if store.len() >= MAX_TRANSCRIPTS {
+        return Err("transcript store at capacity".into());
+    }
     store.insert(tid, t.clone());
     info!(transcript_id = %t.id, "[live_captions] transcript started");
     Ok(t)

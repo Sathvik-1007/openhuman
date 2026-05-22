@@ -93,9 +93,14 @@ pub async fn handle_summarize_transcript(p: Map<String, Value>) -> Result<Value,
         .unwrap_or("");
 
     // Get the full text for LLM summarization.
-    let transcript = store::get_transcript(tid)?;
+    let transcript = match store::get_transcript(tid) {
+        Ok(t) => t,
+        Err(e) => return Ok(json!({"ok": false, "error": e})),
+    };
     if transcript.state != TranscriptState::Completed {
-        return Err("transcript must be completed before summarizing".into());
+        return Ok(
+            json!({"ok": false, "error": "transcript must be completed before summarizing"}),
+        );
     }
 
     let full_text = transcript.full_text();
@@ -278,7 +283,10 @@ pub async fn handle_export_transcript(p: Map<String, Value>) -> Result<Value, St
         .and_then(|v| v.as_str())
         .unwrap_or("markdown");
 
-    let t = store::get_transcript(tid)?;
+    let t = match store::get_transcript(tid) {
+        Ok(t) => t,
+        Err(e) => return Ok(json!({"ok": false, "error": e})),
+    };
     let content = match format {
         "srt" => {
             let mut out = String::new();

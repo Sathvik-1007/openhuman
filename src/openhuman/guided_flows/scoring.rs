@@ -167,8 +167,11 @@ pub fn rank_items(profile: &TagVector, catalog: &[CatalogItem], top_n: usize) ->
     }
 
     // Normalize scores.
-    let max_score = scored.iter().map(|(_, s)| *s).fold(0.0_f64, f64::max);
-    let min_score = scored.iter().map(|(_, s)| *s).fold(f64::MAX, f64::min);
+    let max_score = scored
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_score = scored.iter().map(|(_, s)| *s).fold(f64::INFINITY, f64::min);
     let range = max_score - min_score;
 
     // Sort descending.

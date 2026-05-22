@@ -404,6 +404,10 @@ fn uuid_v4() -> String {
 pub fn delete_dataset(dataset_id: &str) -> Result<(), String> {
     let mut store = DATASETS.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     if store.remove(dataset_id).is_some() {
+        ROW_STORE
+            .lock()
+            .map_err(|e| format!("lock poisoned: {e}"))?
+            .remove(dataset_id);
         info!(dataset_id = %dataset_id, "[chat_with_data] dataset deleted");
         Ok(())
     } else {

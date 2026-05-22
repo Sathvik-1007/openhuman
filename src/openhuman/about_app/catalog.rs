@@ -1284,9 +1284,9 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Start a voice session via RPC: openhuman.voice_assistant_start_session.",
         status: CapabilityStatus::Beta,
         privacy: Some(CapabilityPrivacy {
-            leaves_device: false,
-            data_kind: PrivacyDataKind::Derived,
-            destinations: &[],
+            leaves_device: true,
+            data_kind: PrivacyDataKind::UserContent,
+            destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
     // ── Guided Flows ────────────────────────────────────────────────────────
@@ -1301,9 +1301,9 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Start a flow via RPC: openhuman.guided_flows_start_flow with flow_id.",
         status: CapabilityStatus::Beta,
         privacy: Some(CapabilityPrivacy {
-            leaves_device: false,
-            data_kind: PrivacyDataKind::Derived,
-            destinations: &[],
+            leaves_device: true,
+            data_kind: PrivacyDataKind::UserContent,
+            destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
     // ── Live Captions ───────────────────────────────────────────────────────
@@ -1318,9 +1318,9 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Start via RPC: openhuman.live_captions_start_transcript with source.",
         status: CapabilityStatus::Beta,
         privacy: Some(CapabilityPrivacy {
-            leaves_device: false,
-            data_kind: PrivacyDataKind::Derived,
-            destinations: &[],
+            leaves_device: true,
+            data_kind: PrivacyDataKind::UserContent,
+            destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
     // ── Voice Actions ────────────────────────────────────────────────────────
@@ -1350,9 +1350,9 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Triage via RPC: openhuman.operator_inbox_triage_message with sender/subject/body.",
         status: CapabilityStatus::Beta,
         privacy: Some(CapabilityPrivacy {
-            leaves_device: false,
-            data_kind: PrivacyDataKind::Derived,
-            destinations: &[],
+            leaves_device: true,
+            data_kind: PrivacyDataKind::UserContent,
+            destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
     // ── Chat with Data ──────────────────────────────────────────────────────
@@ -1366,9 +1366,9 @@ const CAPABILITIES: &[Capability] = &[
         how_to: "Query via RPC: openhuman.chat_with_data_query with dataset_id and question.",
         status: CapabilityStatus::Beta,
         privacy: Some(CapabilityPrivacy {
-            leaves_device: false,
-            data_kind: PrivacyDataKind::Derived,
-            destinations: &[],
+            leaves_device: true,
+            data_kind: PrivacyDataKind::UserContent,
+            destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
             destinations: &[],

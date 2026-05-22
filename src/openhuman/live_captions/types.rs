@@ -50,7 +50,7 @@ impl Transcript {
     }
 
     pub fn duration_ms(&self) -> u64 {
-        self.segments.last().map(|s| s.end_ms).unwrap_or(0)
+        self.segments.iter().map(|s| s.end_ms).max().unwrap_or(0)
     }
 }
 

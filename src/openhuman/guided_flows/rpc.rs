@@ -1,6 +1,7 @@
 //! RPC handlers for guided_flows domain.
 
 use serde_json::{json, Map, Value};
+use std::time::Duration;
 use tracing::debug;
 
 use super::engine;
@@ -56,7 +57,12 @@ pub async fn handle_submit_answer(p: Map<String, Value>) -> Result<Value, String
             });
             if let Some(rec) = &s.recommendation {
                 // Enhance recommendation with LLM-generated personalized summary.
-                let personalized = try_llm_personalize(rec, &s.answers).await;
+                let personalized = tokio::time::timeout(
+                    Duration::from_secs(4),
+                    try_llm_personalize(rec, &s.answers),
+                )
+                .await
+                .unwrap_or(None);
                 resp["recommendation"] = json!({
                     "title": rec.title,
                     "summary": personalized.as_deref().unwrap_or(&rec.summary),
@@ -147,50 +153,67 @@ pub async fn handle_register_flow(p: Map<String, Value>) -> Result<Value, String
     }
 
     let steps = match steps_raw {
-        Some(arr) => arr
-            .iter()
-            .filter_map(|s| {
-                let obj = s.as_object()?;
-                Some(super::types::FlowStep {
-                    id: obj.get("id")?.as_str()?.into(),
-                    prompt: obj.get("prompt")?.as_str()?.into(),
-                    answer_type: match obj
-                        .get("answer_type")
+        Some(arr) => {
+            let parsed: Result<Vec<_>, String> = arr
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let obj = s
+                        .as_object()
+                        .ok_or_else(|| format!("step[{i}] is not an object"))?;
+                    let id = obj
+                        .get("id")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("text")
-                    {
-                        "single_choice" => super::types::AnswerType::SingleChoice,
-                        "multi_choice" => super::types::AnswerType::MultiChoice,
-                        "boolean" => super::types::AnswerType::Boolean,
-                        "number" => super::types::AnswerType::Number,
-                        _ => super::types::AnswerType::FreeText,
-                    },
-                    choices: obj
-                        .get("choices")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    validation: obj
-                        .get("validation")
+                        .ok_or_else(|| format!("step[{i}] missing required field 'id'"))?;
+                    let prompt = obj
+                        .get("prompt")
                         .and_then(|v| v.as_str())
-                        .map(String::from),
-                    branches: obj
-                        .get("branches")
-                        .and_then(|v| v.as_object())
-                        .map(|m| {
-                            m.iter()
-                                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.into())))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    next: obj.get("next").and_then(|v| v.as_str()).map(String::from),
+                        .ok_or_else(|| format!("step[{i}] missing required field 'prompt'"))?;
+                    Ok(super::types::FlowStep {
+                        id: id.into(),
+                        prompt: prompt.into(),
+                        answer_type: match obj
+                            .get("answer_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("text")
+                        {
+                            "single_choice" => super::types::AnswerType::SingleChoice,
+                            "multi_choice" => super::types::AnswerType::MultiChoice,
+                            "boolean" => super::types::AnswerType::Boolean,
+                            "number" => super::types::AnswerType::Number,
+                            _ => super::types::AnswerType::FreeText,
+                        },
+                        choices: obj
+                            .get("choices")
+                            .and_then(|v| v.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        validation: obj
+                            .get("validation")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        branches: obj
+                            .get("branches")
+                            .and_then(|v| v.as_object())
+                            .map(|m| {
+                                m.iter()
+                                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.into())))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        next: obj.get("next").and_then(|v| v.as_str()).map(String::from),
+                    })
                 })
-            })
-            .collect(),
+                .collect();
+            match parsed {
+                Ok(steps) => steps,
+                Err(e) => return Ok(json!({"ok": false, "error": e})),
+            }
+        }
         None => return Ok(json!({"ok": false, "error": "steps array is required"})),
     };
 

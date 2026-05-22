@@ -52,6 +52,9 @@ pub struct AnomalyReport {
 /// Points with |z-score| > threshold are flagged as anomalies.
 /// Default threshold is 2.5 (covers ~99% of normal distribution).
 pub fn detect_zscore(data: &[f64], threshold: f64) -> Vec<Anomaly> {
+    if !threshold.is_finite() || threshold <= 0.0 {
+        return vec![];
+    }
     if data.len() < 3 {
         return vec![];
     }
@@ -94,6 +97,9 @@ pub fn detect_zscore(data: &[f64], threshold: f64) -> Vec<Anomaly> {
 /// Points outside [Q1 - k*IQR, Q3 + k*IQR] are flagged.
 /// Default k is 1.5 (standard Tukey fence).
 pub fn detect_iqr(data: &[f64], k: f64) -> Vec<Anomaly> {
+    if !k.is_finite() || k <= 0.0 {
+        return vec![];
+    }
     if data.len() < 4 {
         return vec![];
     }

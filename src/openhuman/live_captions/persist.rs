@@ -29,8 +29,20 @@ pub fn storage_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(SUBDIR)
 }
 
+fn validate_transcript_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("invalid transcript id: {id}"));
+    }
+    Ok(())
+}
+
 /// Save a transcript to disk as JSON.
 pub fn save_transcript(data_dir: &Path, transcript: &Transcript) -> Result<(), String> {
+    validate_transcript_id(&transcript.id)?;
     let dir = storage_dir(data_dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{LOG_PREFIX} create dir failed: {e}"))?;
 
@@ -95,6 +107,7 @@ pub fn load_transcripts(data_dir: &Path) -> Vec<Transcript> {
 
 /// Delete a persisted transcript from disk.
 pub fn delete_transcript(data_dir: &Path, transcript_id: &str) -> Result<(), String> {
+    validate_transcript_id(transcript_id)?;
     let path = storage_dir(data_dir).join(format!("{transcript_id}.json"));
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("{LOG_PREFIX} delete failed: {e}"))?;

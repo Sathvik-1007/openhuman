@@ -36,7 +36,11 @@ pub fn execute_sqlite_query(
         return Err("only SELECT queries allowed on database connector".into());
     }
 
-    debug!("{LOG_PREFIX} executing on {db_path}: {sql}");
+    debug!(
+        "{LOG_PREFIX} executing sqlite query db_path={} sql_len={}",
+        db_path,
+        sql.len()
+    );
 
     // Use rusqlite for SQLite access.
     let conn = rusqlite::Connection::open_with_flags(
@@ -72,9 +76,9 @@ pub fn execute_sqlite_query(
             Ok(map)
         })
         .map_err(|e| format!("{LOG_PREFIX} query: {e}"))?
-        .filter_map(|r| r.ok())
         .take(1000) // Limit rows returned.
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{LOG_PREFIX} row decode: {e}"))?;
 
     info!("{LOG_PREFIX} query returned {} rows", rows.len());
     Ok(rows)

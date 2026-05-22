@@ -48,6 +48,13 @@ struct WindowFeatures {
 /// Perform speaker diarization on PCM16LE audio @ 16kHz.
 /// Returns a list of speaker segments with labels.
 pub fn diarize(pcm: &[i16], sample_rate: u32) -> Vec<SpeakerSegment> {
+    if sample_rate != 16_000 {
+        debug!(
+            "{} unsupported sample_rate={}, returning empty",
+            LOG_PREFIX, sample_rate
+        );
+        return vec![];
+    }
     if pcm.len() < WINDOW_SAMPLES {
         return vec![SpeakerSegment {
             speaker: "Speaker_0".into(),
@@ -117,6 +124,9 @@ pub fn diarize(pcm: &[i16], sample_rate: u32) -> Vec<SpeakerSegment> {
 
 /// Convert sample offset to milliseconds.
 pub fn samples_to_ms(samples: usize, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
     (samples as u64 * 1000) / sample_rate as u64
 }
 
