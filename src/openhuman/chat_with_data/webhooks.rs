@@ -58,6 +58,15 @@ fn validate_webhook_url(url: &str) -> Result<(), String> {
         if ip.is_loopback() {
             return Err("loopback addresses are not allowed".into());
         }
+        let segments = ip.segments();
+        // Link-local: fe80::/10
+        if (segments[0] & 0xffc0) == 0xfe80 {
+            return Err("link-local addresses are not allowed".into());
+        }
+        // Unique local: fc00::/7
+        if (segments[0] & 0xfe00) == 0xfc00 {
+            return Err("private addresses are not allowed".into());
+        }
     }
     Ok(())
 }
