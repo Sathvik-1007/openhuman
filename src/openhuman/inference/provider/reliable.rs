@@ -1063,8 +1063,13 @@ impl Provider for ReliableProvider {
                             "Streaming failed{}", if non_retryable { " (non-retryable)" } else { "" }
                         );
 
-                        // HTTP streams cannot recover after an error —
-                        // try the next candidate provider/model.
+                        if non_retryable {
+                            let _ = tx
+                                .send(Err(super::traits::StreamError::Provider(e.to_string())))
+                                .await;
+                            return;
+                        }
+                        // Retryable — try the next candidate provider/model.
                     }
                     None => {
                         // Stream exhausted without yielding any chunks.
