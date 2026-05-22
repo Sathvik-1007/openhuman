@@ -102,10 +102,16 @@ pub fn process_ws_frame(session_id: &str, pcm_bytes: &[u8]) -> Vec<WsOutbound> {
         let acquired = SessionRegistry::try_acquire_processing(&sid).unwrap_or(false);
         if acquired {
             tokio::spawn(async move {
+                struct Guard(String);
+                impl Drop for Guard {
+                    fn drop(&mut self) {
+                        SessionRegistry::release_processing(&self.0);
+                    }
+                }
+                let _guard = Guard(sid.clone());
                 if let Err(e) = super::brain::run_turn(&sid).await {
                     debug!("{LOG_PREFIX} brain turn failed for ws session {sid}: {e}");
                 }
-                SessionRegistry::release_processing(&sid);
             });
         }
     }

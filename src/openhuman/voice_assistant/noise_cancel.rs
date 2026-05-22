@@ -240,9 +240,7 @@ mod tests {
         // match speech patterns. Verify output is produced without panic and
         // has correct length.
         assert_eq!(out.len(), loud.len());
-        // Output should be non-empty (not all zeros) — some signal passes
-        let out_rms: f32 =
-            (out.iter().map(|&s| (s as f32).powi(2)).sum::<f32>() / out.len() as f32).sqrt();
-        assert!(out_rms >= 0.0, "RMS should be non-negative, got {out_rms}");
+        // Output should contain non-zero signal (some signal passes through)
+        assert!(out.iter().any(|&s| s != 0), "denoiser output is all zeros");
     }
 }

@@ -1039,44 +1039,41 @@ impl Provider for ReliableProvider {
 
         tokio::spawn(async move {
             for (provider_name, current_model, mut candidate_stream) in candidate_streams {
-                loop {
-                    match candidate_stream.next().await {
-                        Some(Ok(chunk)) => {
-                            // First chunk succeeded — commit to this stream
-                            if tx.send(Ok(chunk)).await.is_err() {
+                match candidate_stream.next().await {
+                    Some(Ok(chunk)) => {
+                        // First chunk succeeded — commit to this stream
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            return;
+                        }
+                        // Forward remaining chunks
+                        while let Some(chunk) = candidate_stream.next().await {
+                            if tx.send(chunk).await.is_err() {
                                 return;
                             }
-                            // Forward remaining chunks
-                            while let Some(chunk) = candidate_stream.next().await {
-                                if tx.send(chunk).await.is_err() {
-                                    return;
-                                }
-                            }
-                            return; // Done successfully
                         }
-                        Some(Err(ref e)) => {
-                            let non_retryable = is_stream_error_non_retryable(e);
+                        return; // Done successfully
+                    }
+                    Some(Err(ref e)) => {
+                        let non_retryable = is_stream_error_non_retryable(e);
 
-                            tracing::warn!(
-                                provider = provider_name,
-                                model = current_model,
-                                error = %e,
-                                "Streaming failed{}", if non_retryable { " (non-retryable)" } else { "" }
-                            );
+                        tracing::warn!(
+                            provider = provider_name,
+                            model = current_model,
+                            error = %e,
+                            "Streaming failed{}", if non_retryable { " (non-retryable)" } else { "" }
+                        );
 
-                            // HTTP streams cannot recover after an error —
-                            // break to try the next candidate provider/model.
-                            break;
-                        }
-                        None => {
-                            // Stream exhausted without yielding any chunks.
-                            tracing::warn!(
-                                provider = provider_name,
-                                model = current_model,
-                                "Stream returned empty"
-                            );
-                            break; // Move to next candidate
-                        }
+                        // HTTP streams cannot recover after an error —
+                        // try the next candidate provider/model.
+                    }
+                    None => {
+                        // Stream exhausted without yielding any chunks.
+                        tracing::warn!(
+                            provider = provider_name,
+                            model = current_model,
+                            "Stream returned empty"
+                        );
+                        // Move to next candidate
                     }
                 }
             }

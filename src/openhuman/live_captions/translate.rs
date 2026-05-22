@@ -8,8 +8,7 @@
 //! For offline/edge deployments, swap to a dedicated translation model via the
 //! inference provider config.
 
-use serde_json::json;
-use tracing::{debug, warn};
+use tracing::debug;
 
 const LOG_PREFIX: &str = "[live-captions-translate]";
 

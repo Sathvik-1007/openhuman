@@ -43,6 +43,9 @@ pub async fn handle_query(p: Map<String, Value>) -> Result<Value, String> {
     if question.is_empty() {
         return Ok(json!({"ok": false, "error": "question is required"}));
     }
+    if question.len() > 2000 {
+        return Ok(json!({"ok": false, "error": "question exceeds 2000 chars"}));
+    }
 
     debug!(dataset_id = %id, question_len = question.len(), "[chat_with_data] query RPC");
 
