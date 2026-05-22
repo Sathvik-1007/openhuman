@@ -17,7 +17,7 @@ pub fn start_transcript(
     id: Option<String>,
     source: CaptionSource,
     title: Option<String>,
-) -> Transcript {
+) -> Result<Transcript, String> {
     let tid = id.unwrap_or_else(uuid_v4);
     let now = now_epoch();
     let t = Transcript {
@@ -31,6 +31,9 @@ pub fn start_transcript(
         updated_at: now,
     };
     let mut store = TRANSCRIPTS.lock().unwrap_or_else(|e| e.into_inner());
+    if store.contains_key(&tid) {
+        return Err(format!("transcript already exists: {tid}"));
+    }
     // Evict oldest completed transcripts if at capacity.
     if store.len() >= MAX_TRANSCRIPTS {
         let oldest = store
@@ -45,7 +48,7 @@ pub fn start_transcript(
     }
     store.insert(tid, t.clone());
     info!(transcript_id = %t.id, "[live_captions] transcript started");
-    t
+    Ok(t)
 }
 
 pub fn append_segment(transcript_id: &str, segment: CaptionSegment) -> Result<Transcript, String> {
@@ -193,7 +196,7 @@ mod tests {
 
     #[test]
     fn start_creates_transcript() {
-        let t = start_transcript(Some("st-1".into()), CaptionSource::Microphone, None);
+        let t = start_transcript(Some("st-1".into()), CaptionSource::Microphone, None).unwrap();
         assert_eq!(t.id, "st-1");
         assert_eq!(t.state, TranscriptState::Recording);
         assert!(t.segments.is_empty());
@@ -201,7 +204,7 @@ mod tests {
 
     #[test]
     fn append_segment_works() {
-        start_transcript(Some("st-2".into()), CaptionSource::Microphone, None);
+        start_transcript(Some("st-2".into()), CaptionSource::Microphone, None).unwrap();
         let seg = CaptionSegment {
             text: "Hello".into(),
             start_ms: 0,
@@ -233,7 +236,7 @@ mod tests {
 
     #[test]
     fn pause_and_resume() {
-        start_transcript(Some("st-3".into()), CaptionSource::Microphone, None);
+        start_transcript(Some("st-3".into()), CaptionSource::Microphone, None).unwrap();
         let t = pause_transcript("st-3").unwrap();
         assert_eq!(t.state, TranscriptState::Paused);
         // Can't append while paused
@@ -259,7 +262,8 @@ mod tests {
             Some("st-4".into()),
             CaptionSource::MeetCall,
             Some("Meeting".into()),
-        );
+        )
+        .unwrap();
         append_segment(
             "st-4",
             CaptionSegment {
@@ -293,13 +297,13 @@ mod tests {
 
     #[test]
     fn summarize_requires_completed() {
-        start_transcript(Some("st-5".into()), CaptionSource::Microphone, None);
+        start_transcript(Some("st-5".into()), CaptionSource::Microphone, None).unwrap();
         assert!(summarize_transcript("st-5").is_err());
     }
 
     #[test]
     fn get_transcript_works() {
-        start_transcript(Some("st-6".into()), CaptionSource::SystemAudio, None);
+        start_transcript(Some("st-6".into()), CaptionSource::SystemAudio, None).unwrap();
         let t = get_transcript("st-6").unwrap();
         assert_eq!(t.source, CaptionSource::SystemAudio);
     }
@@ -311,7 +315,7 @@ mod tests {
 
     #[test]
     fn list_transcripts_returns_all() {
-        start_transcript(Some("st-7".into()), CaptionSource::Microphone, None);
+        start_transcript(Some("st-7".into()), CaptionSource::Microphone, None).unwrap();
         let all = list_transcripts();
         assert!(all.iter().any(|t| t.id == "st-7"));
     }

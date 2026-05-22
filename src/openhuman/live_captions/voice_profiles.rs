@@ -40,7 +40,7 @@ pub fn register_profile(name: &str, samples: &[i16]) -> Result<String, String> {
     }
     store.insert(id.clone(), profile);
     save_profiles_to_disk(&store);
-    info!("[voice-profiles] registered '{name}' id={id}");
+    info!("[voice-profiles] registered id={id}");
     Ok(id)
 }
 
@@ -120,8 +120,13 @@ fn save_profiles_to_disk(store: &HashMap<String, VoiceProfile>) {
     let path = profiles_path();
     match serde_json::to_string_pretty(store) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
-                warn!("[voice-profiles] save failed: {e}");
+            let tmp = path.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, &json) {
+                warn!("[voice-profiles] save tmp failed: {e}");
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                warn!("[voice-profiles] atomic rename failed: {e}");
             }
         }
         Err(e) => warn!("[voice-profiles] serialize failed: {e}"),

@@ -1012,7 +1012,6 @@ impl Provider for ReliableProvider {
         // Build model chain and provider info for the spawned task
         let models = self.model_chain(model);
         let model_chain: Vec<String> = models.into_iter().map(|m| m.to_string()).collect();
-        let base_backoff_ms = self.base_backoff_ms;
 
         // Collect provider streams lazily inside the task — we need owned data
         // Provider trait is object-safe, so we call stream_chat_with_system per attempt
@@ -1037,13 +1036,9 @@ impl Provider for ReliableProvider {
         }
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
-        let max_retries = self.max_retries;
 
         tokio::spawn(async move {
             for (provider_name, current_model, mut candidate_stream) in candidate_streams {
-                let mut backoff_ms = base_backoff_ms;
-                let mut attempts = 0u32;
-
                 loop {
                     match candidate_stream.next().await {
                         Some(Ok(chunk)) => {
@@ -1065,29 +1060,21 @@ impl Provider for ReliableProvider {
                             tracing::warn!(
                                 provider = provider_name,
                                 model = current_model,
-                                attempt = attempts + 1,
                                 error = %e,
                                 "Streaming failed{}", if non_retryable { " (non-retryable)" } else { "" }
                             );
 
-                            if non_retryable || attempts >= max_retries {
-                                break; // Move to next candidate
-                            }
-
-                            attempts += 1;
-                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                            backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
-                            // Continue inner loop — stream may yield more items
+                            // HTTP streams cannot recover after an error —
+                            // break to try the next candidate provider/model.
+                            break;
                         }
                         None => {
-                            // Stream exhausted without success
-                            if attempts == 0 {
-                                tracing::warn!(
-                                    provider = provider_name,
-                                    model = current_model,
-                                    "Stream returned empty"
-                                );
-                            }
+                            // Stream exhausted without yielding any chunks.
+                            tracing::warn!(
+                                provider = provider_name,
+                                model = current_model,
+                                "Stream returned empty"
+                            );
                             break; // Move to next candidate
                         }
                     }

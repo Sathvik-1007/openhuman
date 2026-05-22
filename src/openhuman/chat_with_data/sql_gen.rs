@@ -79,10 +79,14 @@ pub fn generate_sql_for_question(
             let cols = if columns.is_empty() {
                 "*".to_string()
             } else {
-                columns.join(", ")
+                columns
+                    .iter()
+                    .map(|c| format!("\"{}\"", c))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             };
             (
-                format!("SELECT {cols} FROM {table_name} LIMIT 100"),
+                format!("SELECT {cols} FROM \"{}\" LIMIT 100", table_name),
                 columns.to_vec(),
                 SqlGenMethod::Fallback,
             )
@@ -148,9 +152,12 @@ fn try_aggregation_pattern(
     let target_col = find_numeric_column(columns, question);
 
     let sql = if agg_fn == "COUNT" {
-        format!("SELECT COUNT(*) AS cnt FROM {table}")
+        format!("SELECT COUNT(*) AS cnt FROM \"{}\"", table)
     } else {
-        format!("SELECT {agg_fn}({target_col}) AS result FROM {table}")
+        format!(
+            "SELECT {}(\"{}\") AS result FROM \"{}\"",
+            agg_fn, target_col, table
+        )
     };
 
     Some((sql, vec![target_col], SqlGenMethod::Pattern))
@@ -178,10 +185,14 @@ fn try_filter_pattern(
         let cols = if columns.is_empty() {
             "*".to_string()
         } else {
-            columns.join(", ")
+            columns
+                .iter()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         let sql = format!(
-            "SELECT {cols} FROM {table} WHERE {date_col} >= datetime('now', '-{days} days') ORDER BY {date_col} DESC LIMIT 100"
+            "SELECT {cols} FROM \"{table}\" WHERE \"{date_col}\" >= datetime('now', '-{days} days') ORDER BY \"{date_col}\" DESC LIMIT 100"
         );
         return Some((sql, columns.to_vec(), SqlGenMethod::Template));
     }
@@ -218,13 +229,13 @@ fn try_group_pattern(
 
     let value_col = find_numeric_column(columns, question);
     let agg = if question.contains("count") {
-        "COUNT(*)"
+        "COUNT(*)".to_string()
     } else {
-        &format!("SUM({value_col})")
+        format!("SUM(\"{}\")", value_col)
     };
 
     let sql = format!(
-        "SELECT {group_col}, {agg} AS result FROM {table} GROUP BY {group_col} ORDER BY result DESC"
+        "SELECT \"{group_col}\", {agg} AS result FROM \"{table}\" GROUP BY \"{group_col}\" ORDER BY result DESC"
     );
     Some((sql, vec![group_col, value_col], SqlGenMethod::Template))
 }

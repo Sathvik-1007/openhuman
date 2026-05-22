@@ -97,13 +97,17 @@ pub fn process_ws_frame(session_id: &str, pcm_bytes: &[u8]) -> Vec<WsOutbound> {
             })
             .unwrap_or_default(),
         ));
-        // Spawn brain turn asynchronously — results will be picked up on next frame poll.
+        // Spawn brain turn with processing lock (prevents concurrent turns).
         let sid = session_id.to_string();
-        tokio::spawn(async move {
-            if let Err(e) = super::brain::run_turn(&sid).await {
-                debug!("{LOG_PREFIX} brain turn failed for ws session {sid}: {e}");
-            }
-        });
+        let acquired = SessionRegistry::try_acquire_processing(&sid).unwrap_or(false);
+        if acquired {
+            tokio::spawn(async move {
+                if let Err(e) = super::brain::run_turn(&sid).await {
+                    debug!("{LOG_PREFIX} brain turn failed for ws session {sid}: {e}");
+                }
+                SessionRegistry::release_processing(&sid);
+            });
+        }
     }
 
     // Check for outbound audio.

@@ -34,8 +34,12 @@ pub fn register_dataset(
     source: DataSource,
     columns: Vec<String>,
     row_count: u64,
-) -> DatasetMeta {
+) -> Result<DatasetMeta, String> {
     let id = format!("ds-{}", name.to_lowercase().replace(' ', "_"));
+    let mut store = DATASETS.lock().unwrap_or_else(|e| e.into_inner());
+    if store.contains_key(&id) {
+        return Err(format!("dataset already exists: {id}"));
+    }
     let d = DatasetMeta {
         id: id.clone(),
         name: name.into(),
@@ -44,12 +48,9 @@ pub fn register_dataset(
         row_count,
         registered_at: now_epoch(),
     };
-    DATASETS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id, d.clone());
+    store.insert(id, d.clone());
     info!(dataset_id = %d.id, name = %d.name, "[chat_with_data] dataset registered");
-    d
+    Ok(d)
 }
 
 pub fn query_dataset(dataset_id: &str, question: &str) -> Result<QueryResult, String> {
@@ -425,7 +426,8 @@ mod tests {
             DataSource::Csv,
             vec!["date".into(), "amount".into()],
             500,
-        );
+        )
+        .unwrap();
         assert_eq!(d.id, "ds-sales_data");
         assert_eq!(d.row_count, 500);
     }

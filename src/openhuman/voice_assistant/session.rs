@@ -4,7 +4,7 @@
 //! history, and provider configuration. Sessions are keyed by a UUID and
 //! stored in a process-wide registry.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
 use base64::Engine as _;
@@ -54,7 +54,7 @@ pub struct VoiceAssistantSession {
     /// Last reply from LLM.
     pub last_reply: String,
     /// Conversation history for LLM context.
-    pub history: Vec<ConversationTurn>,
+    pub history: VecDeque<ConversationTurn>,
     /// Last error from brain turn (if any). Cleared on next successful turn.
     pub last_error: Option<String>,
     /// Epoch seconds of last activity (push_audio, poll, etc.).
@@ -103,7 +103,7 @@ impl VoiceAssistantSession {
             vad: Vad::new(),
             last_transcript: String::new(),
             last_reply: String::new(),
-            history: Vec::new(),
+            history: VecDeque::new(),
             last_error: None,
             last_activity: now_epoch(),
             processing_lock: false,
@@ -196,12 +196,12 @@ impl VoiceAssistantSession {
         self.last_transcript = user_text.to_string();
         self.last_reply = assistant_text.to_string();
         self.turn_count += 1;
-        self.history.push(ConversationTurn {
+        self.history.push_back(ConversationTurn {
             user_text: user_text.to_string(),
             assistant_text: assistant_text.to_string(),
         });
         if self.history.len() > MAX_HISTORY {
-            self.history.remove(0);
+            self.history.pop_front();
         }
     }
 
@@ -258,6 +258,7 @@ impl SessionRegistry {
         if map.contains_key(session_id) {
             // Idempotent restart: close old, open new.
             debug!("{LOG_PREFIX} restarting existing session={session_id}");
+            super::brain::evict_nc_state(session_id);
             map.remove(session_id);
         }
         // Evict expired sessions and enforce max capacity.
@@ -270,6 +271,7 @@ impl SessionRegistry {
                 .map(|s| s.session_id.clone())
             {
                 warn!("{LOG_PREFIX} evicting LRU session={lru_id} (at capacity {MAX_SESSIONS})");
+                super::brain::evict_nc_state(&lru_id);
                 map.remove(&lru_id);
             }
         }
@@ -339,6 +341,7 @@ fn evict_idle_sessions(map: &mut HashMap<String, VoiceAssistantSession>) {
         .collect();
     for id in &expired {
         debug!("{LOG_PREFIX} evicting idle session={id}");
+        super::brain::evict_nc_state(id);
         map.remove(id);
     }
     if !expired.is_empty() {

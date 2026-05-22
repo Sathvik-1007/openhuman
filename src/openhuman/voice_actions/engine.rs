@@ -31,7 +31,7 @@ pub fn get_context(session_id: &str) -> Vec<String> {
     let mut store = CONTEXTS.lock().unwrap_or_else(|e| e.into_inner());
     let now = now_epoch();
     // True LRU: evict oldest sessions when over limit.
-    if store.len() > MAX_CONTEXTS {
+    if store.len() >= MAX_CONTEXTS {
         // First pass: remove stale (timed out).
         let stale: Vec<String> = store
             .iter()
@@ -75,6 +75,29 @@ pub fn get_context(session_id: &str) -> Vec<String> {
 pub fn record_context(session_id: &str, intent_id: &str) {
     let mut store = CONTEXTS.lock().unwrap_or_else(|e| e.into_inner());
     let now = now_epoch();
+    // Enforce capacity before inserting new entries.
+    if store.len() >= MAX_CONTEXTS && !store.contains_key(session_id) {
+        // Evict stale first, then oldest.
+        let stale: Vec<String> = store
+            .iter()
+            .filter(|(_, ctx)| now - ctx.last_active > CONTEXT_TIMEOUT_SECS)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &stale {
+            store.remove(k);
+        }
+        while store.len() >= MAX_CONTEXTS {
+            if let Some(oldest_key) = store
+                .iter()
+                .min_by_key(|(_, ctx)| ctx.last_active)
+                .map(|(k, _)| k.clone())
+            {
+                store.remove(&oldest_key);
+            } else {
+                break;
+            }
+        }
+    }
     let ctx = store
         .entry(session_id.to_string())
         .or_insert_with(|| ActionContext {
@@ -328,24 +351,24 @@ pub fn list_mappings() -> Vec<ActionMapping> {
 
 fn evict_old_intents() {
     let mut store = INTENTS.lock().unwrap_or_else(|e| e.into_inner());
-    if store.len() <= MAX_INTENTS {
-        return;
-    }
-    // Remove oldest executed/failed/rejected intents first.
-    let removable: Vec<String> = store
-        .iter()
-        .filter(|(_, i)| {
-            matches!(
-                i.status,
-                IntentStatus::Executed | IntentStatus::Failed | IntentStatus::Rejected
-            )
-        })
-        .min_by_key(|(_, i)| i.created_at)
-        .map(|(id, _)| id.clone())
-        .into_iter()
-        .collect();
-    for id in removable {
-        store.remove(&id);
+    while store.len() > MAX_INTENTS {
+        // Remove oldest executed/failed/rejected intent.
+        let oldest = store
+            .iter()
+            .filter(|(_, i)| {
+                matches!(
+                    i.status,
+                    IntentStatus::Executed | IntentStatus::Failed | IntentStatus::Rejected
+                )
+            })
+            .min_by_key(|(_, i)| i.created_at)
+            .map(|(id, _)| id.clone());
+        match oldest {
+            Some(id) => {
+                store.remove(&id);
+            }
+            None => break, // No removable intents left
+        }
     }
 }
 

@@ -38,6 +38,10 @@ pub fn evict_nc_state(session_id: &str) {
 /// Called when VAD detects end-of-utterance. The session must exist and
 /// have inbound PCM buffered.
 pub async fn run_turn(session_id: &str) -> Result<(), String> {
+    // Guard: verify session still exists before proceeding (prevents race
+    // where session is stopped between lock acquisition and task execution).
+    SessionRegistry::with_session(session_id, |_| ())?;
+
     info!("{LOG_PREFIX} turn started session={session_id}");
 
     // 1. Mark session as processing and drain inbound PCM.

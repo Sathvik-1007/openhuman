@@ -4,6 +4,7 @@ use serde_json::{json, Map, Value};
 use tracing::debug;
 
 pub async fn handle_triage_message(p: Map<String, Value>) -> Result<Value, String> {
+    debug!("[operator_inbox] triage_message RPC entry");
     let source = match p.get("source").and_then(|v| v.as_str()).unwrap_or("email") {
         "chat" => MessageSource::Chat,
         "social" => MessageSource::Social,
@@ -88,6 +89,9 @@ async fn try_llm_triage(
 
 pub async fn handle_generate_draft(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("triage_id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.is_empty() {
+        return Ok(json!({"ok": false, "error": "triage_id is required"}));
+    }
     let tone = match p
         .get("tone")
         .and_then(|v| v.as_str())
@@ -153,7 +157,15 @@ async fn try_llm_draft(rec: &TriageRecord, tone: &ReplyTone) -> Option<String> {
 
 pub async fn handle_schedule_followup(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("triage_id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.is_empty() {
+        return Ok(json!({"ok": false, "error": "triage_id is required"}));
+    }
     let at = p.get("follow_up_at").and_then(|v| v.as_u64()).unwrap_or(0);
+    if at == 0 {
+        return Ok(
+            json!({"ok": false, "error": "follow_up_at must be a non-zero epoch timestamp"}),
+        );
+    }
     match engine::schedule_followup(id, at) {
         Ok(r) => Ok(json!({"ok":true,"triage_id":r.id,"follow_up_at":r.follow_up_at})),
         Err(e) => Ok(json!({"ok":false,"error":e})),

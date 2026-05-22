@@ -228,7 +228,7 @@ controller-registry RPC exposure, LLM fallback paths, and safety validation.
 
 ### Security
 
-- SQL injection prevention via `sqlparser` AST validation — no string interpolation
+- SQL injection prevention via `sqlparser` AST validation + double-quoted identifiers
 - Only read-only queries (SELECT) pass safety check
 - Bearer auth required for all RPC calls
 - No external database connections in default mode (in-memory only)
@@ -291,7 +291,7 @@ RPC method naming convention: `openhuman.<namespace>_<function>`
 
 ## Testing
 
-214+ unit tests across all modules. Each module has:
+245+ unit tests across all modules. Each module has:
 - Schema registration tests (handlers match schemas, correct namespace)
 - Engine logic tests (happy path + error cases)
 - Type serialization round-trip tests
@@ -353,3 +353,29 @@ Format: `[voice-assistant-brain] turn completed session=X latency: stt=Nms llm=N
 `ws_router()` returns a mountable Axum Router with the `/ws/voice/{session_id}`
 upgrade endpoint. Merge into any Axum app for real-time bidirectional audio
 streaming (PCM16LE binary frames + JSON status messages).
+
+---
+
+## Known Limitations & Future Work
+
+### No Rust Solution Currently
+
+| Capability | Status | Notes |
+|-----------|--------|-------|
+| **Voice Cloning** | No Rust crate | Closest: sherpa-onnx VITS/Kokoro TTS with voice selection. No pure-Rust voice cloning exists. |
+| **Neural Speaker Diarization** | Skipped | `speakrs 0.4` requires MKL/OpenBLAS (~200MB), uses `ort 2.x` which conflicts with other crates using `ort 1.x`. Energy-based diarization used instead. |
+| **Neural Translation** | LLM pipeline | `rust-bert` uses `ort 1.x`, incompatible with `ort 2.x` in same binary. Translation uses LLM inference (GPT-4/Claude/local) via `translate.rs` — better quality than offline models. |
+
+### Architecture Decisions
+
+- **In-memory stores**: All modules use `LazyLock<Mutex<HashMap>>`. Voice profiles persist to JSON. Full persistence (SQLite/sled) is future work.
+- **Energy-based diarization**: 13-dim band energy features. Adequate for demo, not production speaker ID. Future: sherpa-onnx speaker embedding models.
+- **Emotion detection**: Keyword heuristics only. Future: acoustic/prosodic analysis via ML model.
+- **WebSocket transport**: Infrastructure-ready (`ws_router()`) but not mounted in Tauri desktop app (uses IPC). For future HTTP server mode.
+
+### Security Hardening Applied
+
+- SQL identifiers double-quoted in all `sql_gen.rs` paths (prevents injection)
+- Atomic file writes for voice profiles (write-to-tmp + rename)
+- Per-session processing locks prevent concurrent brain turns
+- Input validation on all RPC endpoints (required field checks)

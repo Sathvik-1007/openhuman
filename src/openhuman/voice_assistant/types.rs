@@ -127,20 +127,6 @@ pub enum SessionState {
     WakeWordListening,
 }
 
-/// Detected language info from STT.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DetectedLanguage {
-    pub code: String,
-    pub confidence: f64,
-}
-
-/// Emotion/sentiment detected from speech.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpeechEmotion {
-    pub label: String,
-    pub confidence: f64,
-}
-
 /// Inputs to `openhuman.voice_assistant_interrupt`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct InterruptRequest {

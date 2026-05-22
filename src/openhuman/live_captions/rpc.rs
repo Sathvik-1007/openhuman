@@ -19,8 +19,10 @@ pub async fn handle_start_transcript(p: Map<String, Value>) -> Result<Value, Str
         .and_then(|v| v.as_str())
         .map(String::from);
     let title = p.get("title").and_then(|v| v.as_str()).map(String::from);
-    let t = store::start_transcript(id, source, title);
-    Ok(json!({ "ok": true, "transcript_id": t.id, "state": t.state }))
+    match store::start_transcript(id, source, title) {
+        Ok(t) => Ok(json!({ "ok": true, "transcript_id": t.id, "state": t.state })),
+        Err(e) => Ok(json!({ "ok": false, "error": e })),
+    }
 }
 
 pub async fn handle_append_segment(p: Map<String, Value>) -> Result<Value, String> {
@@ -28,12 +30,15 @@ pub async fn handle_append_segment(p: Map<String, Value>) -> Result<Value, Strin
         .get("transcript_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    if tid.is_empty() {
+        return Ok(json!({ "ok": false, "error": "transcript_id is required" }));
+    }
+    let text = p.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    if text.is_empty() {
+        return Ok(json!({ "ok": false, "error": "text is required" }));
+    }
     let seg = CaptionSegment {
-        text: p
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        text: text.to_string(),
         start_ms: p.get("start_ms").and_then(|v| v.as_u64()).unwrap_or(0),
         end_ms: p.get("end_ms").and_then(|v| v.as_u64()).unwrap_or(0),
         speaker: p.get("speaker").and_then(|v| v.as_str()).map(String::from),

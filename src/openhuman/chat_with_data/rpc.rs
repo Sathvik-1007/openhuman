@@ -4,7 +4,10 @@ use serde_json::{json, Map, Value};
 use tracing::debug;
 
 pub async fn handle_register_dataset(p: Map<String, Value>) -> Result<Value, String> {
-    let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+    let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if name.is_empty() {
+        return Ok(json!({"ok": false, "error": "name is required"}));
+    }
     let source = match p.get("source").and_then(|v| v.as_str()).unwrap_or("csv") {
         "json" => DataSource::Json,
         "sqlite" => DataSource::Sqlite,
@@ -21,15 +24,27 @@ pub async fn handle_register_dataset(p: Map<String, Value>) -> Result<Value, Str
         })
         .unwrap_or_default();
     let row_count = p.get("row_count").and_then(|v| v.as_u64()).unwrap_or(0);
-    let d = engine::register_dataset(name, source, columns, row_count);
-    Ok(
-        json!({"ok":true,"dataset_id":d.id,"name":d.name,"columns":d.columns,"row_count":d.row_count}),
-    )
+    debug!(name = %name, source = ?source, "[chat_with_data] register_dataset RPC");
+    match engine::register_dataset(name, source, columns, row_count) {
+        Ok(d) => Ok(
+            json!({"ok":true,"dataset_id":d.id,"name":d.name,"columns":d.columns,"row_count":d.row_count}),
+        ),
+        Err(e) => Ok(json!({"ok": false, "error": e})),
+    }
 }
 
 pub async fn handle_query(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("dataset_id").and_then(|v| v.as_str()).unwrap_or("");
     let question = p.get("question").and_then(|v| v.as_str()).unwrap_or("");
+
+    if id.is_empty() {
+        return Ok(json!({"ok": false, "error": "dataset_id is required"}));
+    }
+    if question.is_empty() {
+        return Ok(json!({"ok": false, "error": "question is required"}));
+    }
+
+    debug!(dataset_id = %id, question_len = question.len(), "[chat_with_data] query RPC");
 
     // Get dataset schema for context.
     let ds = engine::get_dataset(id)?;
@@ -106,6 +121,10 @@ async fn try_llm_sql_gen(ds: &DatasetMeta, question: &str) -> Option<String> {
 
 pub async fn handle_generate_insight(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("dataset_id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.is_empty() {
+        return Ok(json!({"ok": false, "error": "dataset_id is required"}));
+    }
+    debug!(dataset_id = %id, "[chat_with_data] generate_insight RPC");
     match engine::generate_insight(id) {
         Ok(i) => {
             // Enhance insight with LLM-generated explanation.
@@ -173,6 +192,9 @@ pub async fn handle_get_dataset(p: Map<String, Value>) -> Result<Value, String> 
 
 pub async fn handle_ingest_rows(p: Map<String, Value>) -> Result<Value, String> {
     let id = p.get("dataset_id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.is_empty() {
+        return Ok(json!({"ok": false, "error": "dataset_id is required"}));
+    }
     let rows_val = p.get("rows").and_then(|v| v.as_array());
     let rows: Vec<std::collections::HashMap<String, f64>> = rows_val
         .map(|arr| {

@@ -10,6 +10,7 @@ pub mod persist;
 mod rpc;
 mod schemas;
 pub mod store;
+pub mod translate;
 pub mod types;
 pub mod voice_profiles;
 
