@@ -32,6 +32,10 @@ pub enum WebhookEvent {
 /// Validate that a webhook URL does not target private/loopback addresses (SSRF protection).
 fn validate_webhook_url(url: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        s => return Err(format!("webhook url must be http/https, got: {s}")),
+    }
     let host = parsed.host_str().unwrap_or("");
     if host.is_empty() {
         return Err("URL has no host".into());

@@ -50,10 +50,14 @@ struct WindowFeatures {
 pub fn diarize(pcm: &[i16], sample_rate: u32) -> Vec<SpeakerSegment> {
     if sample_rate != 16_000 {
         debug!(
-            "{} unsupported sample_rate={}, returning empty",
+            "{} unsupported sample_rate={}, returning single segment",
             LOG_PREFIX, sample_rate
         );
-        return vec![];
+        return vec![SpeakerSegment {
+            speaker: "Speaker_0".into(),
+            start_sample: 0,
+            end_sample: pcm.len(),
+        }];
     }
     if pcm.len() < WINDOW_SAMPLES {
         return vec![SpeakerSegment {
