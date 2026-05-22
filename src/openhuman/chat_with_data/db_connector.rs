@@ -106,8 +106,8 @@ pub fn get_sqlite_schema(db_path: &str, table: &str) -> Result<Vec<(String, Stri
             Ok((name, ty))
         })
         .map_err(|e| format!("{LOG_PREFIX} schema query: {e}"))?
-        .filter_map(|r| r.ok())
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{LOG_PREFIX} schema row decode: {e}"))?;
 
     if cols.is_empty() {
         return Err(format!("table '{table}' not found or empty"));
@@ -130,8 +130,8 @@ pub fn list_sqlite_tables(db_path: &str) -> Result<Vec<String>, String> {
     let tables = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| format!("{LOG_PREFIX} query: {e}"))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{LOG_PREFIX} table row decode: {e}"))?;
 
     Ok(tables)
 }
