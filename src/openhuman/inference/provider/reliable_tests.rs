@@ -390,9 +390,8 @@ async fn session_expired_aborts_retries_streaming() {
         StreamOptions::new(true),
     );
 
-    // Drain the consumer-facing stream. ReliableProvider does NOT forward
-    // candidate errors — the consumer only sees a single terminal
-    // "All streaming providers/models failed" once retries are exhausted.
+    // Drain the consumer-facing stream. Non-retryable errors are forwarded
+    // directly to the consumer with the original error message.
     let mut terminal: Option<String> = None;
     while let Some(item) = stream.next().await {
         if let Err(StreamError::Provider(msg)) = item {
@@ -411,10 +410,10 @@ async fn session_expired_aborts_retries_streaming() {
         "session-expired must abort the streaming retry loop after the first poll; \
          a second poll means is_stream_error_non_retryable misclassified it"
     );
-    let terminal = terminal.expect("stream must surface a terminal aggregate error");
+    let terminal = terminal.expect("stream must surface a terminal error");
     assert!(
-        terminal.contains("All streaming providers/models failed"),
-        "expected aggregate failure terminal, got: {terminal}"
+        terminal.contains("SESSION_EXPIRED"),
+        "expected non-retryable error forwarded directly, got: {terminal}"
     );
 }
 
