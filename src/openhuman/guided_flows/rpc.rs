@@ -1,12 +1,13 @@
 //! RPC handlers for guided_flows domain.
 
+use crate::rpc::RpcOutcome;
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 use tracing::debug;
 
 use super::engine;
 
-pub async fn handle_list_flows(_p: Map<String, Value>) -> Result<Value, String> {
+pub async fn handle_list_flows(_p: Map<String, Value>) -> Result<RpcOutcome<Value>, String> {
     let flows = engine::list_flows();
     let list: Vec<Value> = flows
         .iter()
@@ -20,10 +21,13 @@ pub async fn handle_list_flows(_p: Map<String, Value>) -> Result<Value, String> 
             })
         })
         .collect();
-    Ok(json!({ "ok": true, "flows": list }))
+    Ok(RpcOutcome::single_log(
+        json!({ "ok": true, "flows": list }),
+        "listed flows",
+    ))
 }
 
-pub async fn handle_start_flow(p: Map<String, Value>) -> Result<Value, String> {
+pub async fn handle_start_flow(p: Map<String, Value>) -> Result<RpcOutcome<Value>, String> {
     let flow_id = p.get("flow_id").and_then(|v| v.as_str()).unwrap_or("");
     let session_id = p
         .get("session_id")
@@ -31,18 +35,24 @@ pub async fn handle_start_flow(p: Map<String, Value>) -> Result<Value, String> {
         .map(String::from);
 
     match engine::start_flow(flow_id, session_id) {
-        Ok(s) => Ok(json!({
-            "ok": true,
-            "session_id": s.session_id,
-            "flow_id": s.flow_id,
-            "current_step": s.current_step,
-            "state": s.state,
-        })),
-        Err(e) => Ok(json!({ "ok": false, "error": e })),
+        Ok(s) => Ok(RpcOutcome::single_log(
+            json!({
+                "ok": true,
+                "session_id": s.session_id,
+                "flow_id": s.flow_id,
+                "current_step": s.current_step,
+                "state": s.state,
+            }),
+            format!("started flow {flow_id}"),
+        )),
+        Err(e) => Ok(RpcOutcome::single_log(
+            json!({ "ok": false, "error": e }),
+            format!("start_flow failed: {e}"),
+        )),
     }
 }
 
-pub async fn handle_submit_answer(p: Map<String, Value>) -> Result<Value, String> {
+pub async fn handle_submit_answer(p: Map<String, Value>) -> Result<RpcOutcome<Value>, String> {
     let session_id = p.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
     let step_id = p.get("step_id").and_then(|v| v.as_str()).unwrap_or("");
     let value = p.get("value").cloned().unwrap_or(Value::Null);
@@ -70,9 +80,15 @@ pub async fn handle_submit_answer(p: Map<String, Value>) -> Result<Value, String
                     "next_actions": rec.next_actions,
                 });
             }
-            Ok(resp)
+            Ok(RpcOutcome::single_log(
+                resp,
+                format!("submitted answer for step {step_id}"),
+            ))
         }
-        Err(e) => Ok(json!({ "ok": false, "error": e })),
+        Err(e) => Ok(RpcOutcome::single_log(
+            json!({ "ok": false, "error": e }),
+            format!("submit_answer failed: {e}"),
+        )),
     }
 }
 
@@ -115,7 +131,7 @@ async fn try_llm_personalize(
     Some(text.trim().to_string())
 }
 
-pub async fn handle_get_session(p: Map<String, Value>) -> Result<Value, String> {
+pub async fn handle_get_session(p: Map<String, Value>) -> Result<RpcOutcome<Value>, String> {
     let session_id = p.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
     match engine::get_session(session_id) {
         Ok(s) => {
@@ -135,13 +151,19 @@ pub async fn handle_get_session(p: Map<String, Value>) -> Result<Value, String> 
                     "next_actions": rec.next_actions,
                 });
             }
-            Ok(resp)
+            Ok(RpcOutcome::single_log(
+                resp,
+                format!("fetched session {session_id}"),
+            ))
         }
-        Err(e) => Ok(json!({ "ok": false, "error": e })),
+        Err(e) => Ok(RpcOutcome::single_log(
+            json!({ "ok": false, "error": e }),
+            format!("get_session failed: {e}"),
+        )),
     }
 }
 
-pub async fn handle_register_flow(p: Map<String, Value>) -> Result<Value, String> {
+pub async fn handle_register_flow(p: Map<String, Value>) -> Result<RpcOutcome<Value>, String> {
     let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
     let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let description = p.get("description").and_then(|v| v.as_str()).unwrap_or("");
@@ -149,7 +171,10 @@ pub async fn handle_register_flow(p: Map<String, Value>) -> Result<Value, String
     let steps_raw = p.get("steps").and_then(|v| v.as_array());
 
     if id.is_empty() || name.is_empty() || start_step.is_empty() {
-        return Ok(json!({"ok": false, "error": "id, name, and start_step are required"}));
+        return Ok(RpcOutcome::single_log(
+            json!({"ok": false, "error": "id, name, and start_step are required"}),
+            "register_flow: missing required fields",
+        ));
     }
 
     let steps = match steps_raw {
@@ -211,15 +236,31 @@ pub async fn handle_register_flow(p: Map<String, Value>) -> Result<Value, String
                 .collect();
             match parsed {
                 Ok(steps) => steps,
-                Err(e) => return Ok(json!({"ok": false, "error": e})),
+                Err(e) => {
+                    return Ok(RpcOutcome::single_log(
+                        json!({"ok": false, "error": e}),
+                        format!("register_flow: invalid steps: {e}"),
+                    ))
+                }
             }
         }
-        None => return Ok(json!({"ok": false, "error": "steps array is required"})),
+        None => {
+            return Ok(RpcOutcome::single_log(
+                json!({"ok": false, "error": "steps array is required"}),
+                "register_flow: missing steps",
+            ))
+        }
     };
 
     match engine::register_flow(id, name, description, start_step, steps) {
-        Ok(flow_id) => Ok(json!({"ok": true, "flow_id": flow_id})),
-        Err(e) => Ok(json!({"ok": false, "error": e})),
+        Ok(flow_id) => Ok(RpcOutcome::single_log(
+            json!({"ok": true, "flow_id": flow_id}),
+            format!("registered flow {id}"),
+        )),
+        Err(e) => Ok(RpcOutcome::single_log(
+            json!({"ok": false, "error": e}),
+            format!("register_flow failed: {e}"),
+        )),
     }
 }
 
@@ -229,7 +270,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_flows_rpc_returns_ok() {
-        let resp = handle_list_flows(Map::new()).await.unwrap();
+        let outcome = handle_list_flows(Map::new()).await.unwrap();
+        let resp = &outcome.value;
         assert_eq!(resp["ok"], true);
         assert!(resp["flows"].as_array().unwrap().len() > 0);
     }
@@ -239,7 +281,8 @@ mod tests {
         let mut p = Map::new();
         p.insert("flow_id".into(), Value::String("onboarding_setup".into()));
         p.insert("session_id".into(), Value::String("rpc-t1".into()));
-        let resp = handle_start_flow(p).await.unwrap();
+        let outcome = handle_start_flow(p).await.unwrap();
+        let resp = &outcome.value;
         assert_eq!(resp["ok"], true);
         assert_eq!(resp["session_id"], "rpc-t1");
     }
@@ -248,8 +291,8 @@ mod tests {
     async fn start_flow_rpc_bad_id() {
         let mut p = Map::new();
         p.insert("flow_id".into(), Value::String("nope".into()));
-        let resp = handle_start_flow(p).await.unwrap();
-        assert_eq!(resp["ok"], false);
+        let outcome = handle_start_flow(p).await.unwrap();
+        assert_eq!(outcome.value["ok"], false);
     }
 
     #[tokio::test]
@@ -266,7 +309,8 @@ mod tests {
             "value".into(),
             Value::String("Personal productivity".into()),
         );
-        let resp = handle_submit_answer(p).await.unwrap();
+        let outcome = handle_submit_answer(p).await.unwrap();
+        let resp = &outcome.value;
         assert_eq!(resp["ok"], true);
         assert_eq!(resp["current_step"], "privacy_pref");
     }
@@ -280,7 +324,8 @@ mod tests {
 
         let mut p = Map::new();
         p.insert("session_id".into(), Value::String("rpc-t3".into()));
-        let resp = handle_get_session(p).await.unwrap();
+        let outcome = handle_get_session(p).await.unwrap();
+        let resp = &outcome.value;
         assert_eq!(resp["ok"], true);
         assert_eq!(resp["state"], "active");
     }

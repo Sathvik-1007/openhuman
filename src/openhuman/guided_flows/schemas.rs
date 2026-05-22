@@ -272,19 +272,39 @@ fn schema_unknown() -> ControllerSchema {
 }
 
 fn handle_list_flows(p: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { super::rpc::handle_list_flows(p).await })
+    Box::pin(async move {
+        super::rpc::handle_list_flows(p)
+            .await?
+            .into_cli_compatible_json()
+    })
 }
 fn handle_start_flow(p: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { super::rpc::handle_start_flow(p).await })
+    Box::pin(async move {
+        super::rpc::handle_start_flow(p)
+            .await?
+            .into_cli_compatible_json()
+    })
 }
 fn handle_submit_answer(p: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { super::rpc::handle_submit_answer(p).await })
+    Box::pin(async move {
+        super::rpc::handle_submit_answer(p)
+            .await?
+            .into_cli_compatible_json()
+    })
 }
 fn handle_get_session(p: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { super::rpc::handle_get_session(p).await })
+    Box::pin(async move {
+        super::rpc::handle_get_session(p)
+            .await?
+            .into_cli_compatible_json()
+    })
 }
 fn handle_register_flow(p: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { super::rpc::handle_register_flow(p).await })
+    Box::pin(async move {
+        super::rpc::handle_register_flow(p)
+            .await?
+            .into_cli_compatible_json()
+    })
 }
 
 fn schema_register_flow() -> ControllerSchema {
