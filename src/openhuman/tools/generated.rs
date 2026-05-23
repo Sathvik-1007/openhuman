@@ -4,9 +4,11 @@
 //! expose generated capability tools without adding a bespoke Rust type
 //! for each tool and without handing the model a broad raw bridge.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope};
@@ -20,6 +22,11 @@ pub struct GeneratedToolDefinition {
     pub category: ToolCategory,
     pub scope: ToolScope,
     pub adapter_id: String,
+    pub provider_id: Option<String>,
+    pub capability_id: Option<String>,
+    pub source_digest: Option<String>,
+    pub risk: Option<GeneratedToolRisk>,
+    pub policy_surface: Option<String>,
 }
 
 impl GeneratedToolDefinition {
@@ -37,8 +44,50 @@ impl GeneratedToolDefinition {
             category: ToolCategory::Skill,
             scope: ToolScope::All,
             adapter_id: adapter_id.into(),
+            provider_id: None,
+            capability_id: None,
+            source_digest: None,
+            risk: None,
+            policy_surface: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratedToolRisk {
+    Read,
+    Write,
+    ExternalWrite,
+    Execute,
+    Dangerous,
+}
+
+impl GeneratedToolRisk {
+    fn is_external_effect(self) -> bool {
+        matches!(self, Self::ExternalWrite | Self::Dangerous)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GeneratedToolAdmissionConfig {
+    pub enforce_provenance: bool,
+    pub trusted_providers: BTreeSet<String>,
+    pub disabled_providers: BTreeSet<String>,
+    pub disabled_capabilities: BTreeSet<String>,
+    pub existing_tool_names: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedToolAdmissionRejection {
+    pub tool_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GeneratedToolAdmissionReport {
+    pub admitted: Vec<GeneratedToolDefinition>,
+    pub rejected: Vec<GeneratedToolAdmissionRejection>,
 }
 
 #[async_trait]
@@ -124,6 +173,13 @@ impl Tool for GeneratedTool {
     fn category(&self) -> ToolCategory {
         self.definition.category
     }
+
+    fn external_effect(&self) -> bool {
+        self.definition
+            .risk
+            .map(GeneratedToolRisk::is_external_effect)
+            .unwrap_or(false)
+    }
 }
 
 pub fn generated_tools_from_definitions(
@@ -139,10 +195,34 @@ pub fn generated_tools_from_definitions(
         .collect()
 }
 
+pub fn admit_generated_tool_definitions(
+    definitions: Vec<GeneratedToolDefinition>,
+    config: &GeneratedToolAdmissionConfig,
+) -> GeneratedToolAdmissionReport {
+    let mut seen = config.existing_tool_names.clone();
+    let mut admitted = Vec::new();
+    let mut rejected = Vec::new();
+
+    for mut definition in definitions {
+        normalize_definition(&mut definition);
+        let tool_name = definition.name.clone();
+        match validate_admission(&definition, config, &mut seen) {
+            Ok(()) => admitted.push(definition),
+            Err(reason) => rejected.push(GeneratedToolAdmissionRejection { tool_name, reason }),
+        }
+    }
+
+    GeneratedToolAdmissionReport { admitted, rejected }
+}
+
 fn normalize_definition(definition: &mut GeneratedToolDefinition) {
     definition.name = definition.name.trim().to_string();
     definition.description = definition.description.trim().to_string();
     definition.adapter_id = definition.adapter_id.trim().to_string();
+    definition.provider_id = trim_option(definition.provider_id.take());
+    definition.capability_id = trim_option(definition.capability_id.take());
+    definition.source_digest = trim_option(definition.source_digest.take());
+    definition.policy_surface = trim_option(definition.policy_surface.take());
 }
 
 fn validate_definition(definition: &GeneratedToolDefinition) -> anyhow::Result<()> {
@@ -159,6 +239,85 @@ fn validate_definition(definition: &GeneratedToolDefinition) -> anyhow::Result<(
     crate::openhuman::tools::schema::SchemaCleanr::validate(&definition.parameters_schema)
         .map_err(|err| anyhow::anyhow!("generated tool `{name}` has invalid schema: {err}"))?;
     Ok(())
+}
+
+fn validate_admission(
+    definition: &GeneratedToolDefinition,
+    config: &GeneratedToolAdmissionConfig,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    validate_definition(definition).map_err(|err| err.to_string())?;
+    if !is_safe_generated_tool_name(&definition.name) {
+        return Err(format!(
+            "generated tool `{}` name contains unsupported characters",
+            definition.name
+        ));
+    }
+    if !seen.insert(definition.name.clone()) {
+        return Err(format!("duplicate generated tool `{}`", definition.name));
+    }
+    if !config.enforce_provenance {
+        return Ok(());
+    }
+
+    let provider_id = definition
+        .provider_id
+        .as_deref()
+        .ok_or_else(|| format!("generated tool `{}` missing provider_id", definition.name))?;
+    if config.disabled_providers.contains(provider_id) {
+        return Err(format!(
+            "generated tool `{}` provider `{provider_id}` is disabled",
+            definition.name
+        ));
+    }
+    if !config.trusted_providers.contains(provider_id) {
+        return Err(format!(
+            "generated tool `{}` provider `{provider_id}` is not trusted",
+            definition.name
+        ));
+    }
+
+    let capability_id = definition
+        .capability_id
+        .as_deref()
+        .ok_or_else(|| format!("generated tool `{}` missing capability_id", definition.name))?;
+    if config.disabled_capabilities.contains(capability_id) {
+        return Err(format!(
+            "generated tool `{}` capability `{capability_id}` is disabled",
+            definition.name
+        ));
+    }
+
+    if definition.risk.is_none() {
+        return Err(format!(
+            "generated tool `{}` missing risk metadata",
+            definition.name
+        ));
+    }
+    if definition.source_digest.is_none() {
+        return Err(format!(
+            "generated tool `{}` missing source_digest",
+            definition.name
+        ));
+    }
+
+    Ok(())
+}
+
+fn trim_option(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn is_safe_generated_tool_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty()
+        && !trimmed.starts_with(['.', '-', '_'])
+        && !trimmed.ends_with(['.', '-', '_'])
+        && trimmed.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-' | '_')
+        })
 }
 
 #[cfg(test)]
@@ -204,7 +363,19 @@ mod tests {
             "echo-adapter",
         );
         definition.permission_level = PermissionLevel::Write;
+        definition.provider_id = Some("trusted.runtime".into());
+        definition.capability_id = Some("updates.send".into());
+        definition.source_digest = Some("sha256:abc".into());
+        definition.risk = Some(GeneratedToolRisk::ExternalWrite);
         definition
+    }
+
+    fn admission_config() -> GeneratedToolAdmissionConfig {
+        GeneratedToolAdmissionConfig {
+            enforce_provenance: true,
+            trusted_providers: BTreeSet::from(["trusted.runtime".to_string()]),
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
@@ -268,5 +439,86 @@ mod tests {
         assert_eq!(tool.name(), "send_update");
         assert_eq!(tool.description(), "Send a scoped update.");
         assert_eq!(tool.definition().adapter_id, "echo-adapter");
+        assert_eq!(
+            tool.definition().provider_id.as_deref(),
+            Some("trusted.runtime")
+        );
+    }
+
+    #[test]
+    fn admission_allows_trusted_generated_tool() {
+        let report =
+            admit_generated_tool_definitions(vec![sample_definition()], &admission_config());
+
+        assert_eq!(report.admitted.len(), 1);
+        assert!(report.rejected.is_empty());
+    }
+
+    #[test]
+    fn admission_disabled_preserves_legacy_generated_tools() {
+        let mut definition = sample_definition();
+        definition.provider_id = None;
+        definition.capability_id = None;
+        definition.source_digest = None;
+        definition.risk = None;
+
+        let report = admit_generated_tool_definitions(
+            vec![definition],
+            &GeneratedToolAdmissionConfig::default(),
+        );
+
+        assert_eq!(report.admitted.len(), 1);
+        assert!(report.rejected.is_empty());
+    }
+
+    #[test]
+    fn admission_rejects_untrusted_provider() {
+        let mut definition = sample_definition();
+        definition.provider_id = Some("other.runtime".into());
+
+        let report = admit_generated_tool_definitions(vec![definition], &admission_config());
+
+        assert!(report.admitted.is_empty());
+        assert!(report.rejected[0].reason.contains("not trusted"));
+    }
+
+    #[test]
+    fn admission_rejects_duplicate_tool_names() {
+        let report = admit_generated_tool_definitions(
+            vec![sample_definition(), sample_definition()],
+            &admission_config(),
+        );
+
+        assert_eq!(report.admitted.len(), 1);
+        assert!(report.rejected[0].reason.contains("duplicate"));
+    }
+
+    #[test]
+    fn admission_rejects_missing_risk_when_enforced() {
+        let mut definition = sample_definition();
+        definition.risk = None;
+
+        let report = admit_generated_tool_definitions(vec![definition], &admission_config());
+
+        assert!(report.admitted.is_empty());
+        assert!(report.rejected[0].reason.contains("missing risk"));
+    }
+
+    #[test]
+    fn admission_rejects_unsafe_names() {
+        let mut definition = sample_definition();
+        definition.name = "Bad Tool".into();
+
+        let report = admit_generated_tool_definitions(vec![definition], &admission_config());
+
+        assert!(report.admitted.is_empty());
+        assert!(report.rejected[0].reason.contains("unsupported characters"));
+    }
+
+    #[tokio::test]
+    async fn generated_tool_marks_external_risk_as_external_effect() {
+        let tool = GeneratedTool::new(sample_definition(), Arc::new(EchoAdapter)).unwrap();
+
+        assert!(tool.external_effect());
     }
 }
