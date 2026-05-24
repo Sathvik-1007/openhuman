@@ -92,8 +92,14 @@ pub struct GeneratedToolAdmissionConfig {
     /// Whether provenance fields are required for admission.
     pub enforce_provenance: bool,
     /// Provider ids allowed to register generated tools.
+    ///
+    /// Values are normalized with the same provider-id rules used for
+    /// generated tool definitions before admission checks run.
     pub trusted_providers: BTreeSet<String>,
     /// Provider ids blocked from registration.
+    ///
+    /// Values are normalized with the same provider-id rules used for
+    /// generated tool definitions before admission checks run.
     pub disabled_providers: BTreeSet<String>,
     /// Capability ids blocked from registration.
     pub disabled_capabilities: BTreeSet<String>,
@@ -270,7 +276,7 @@ fn normalize_definition(definition: &mut GeneratedToolDefinition) {
     definition.name = definition.name.trim().to_string();
     definition.description = definition.description.trim().to_string();
     definition.adapter_id = definition.adapter_id.trim().to_string();
-    definition.provider_id = trim_option(definition.provider_id.take());
+    definition.provider_id = normalize_optional_provider_id(definition.provider_id.take());
     definition.capability_id = trim_option(definition.capability_id.take());
     definition.source_digest = trim_option(definition.source_digest.take());
     definition.policy_surface = trim_option(definition.policy_surface.take());
@@ -315,13 +321,19 @@ fn validate_admission(
         .provider_id
         .as_deref()
         .ok_or_else(|| format!("generated tool `{}` missing provider_id", definition.name))?;
-    if config.disabled_providers.contains(provider_id) {
+    if normalize_provider_id(provider_id).is_none() {
+        return Err(format!(
+            "generated tool `{}` has invalid provider_id `{provider_id}`",
+            definition.name
+        ));
+    }
+    if normalize_provider_set(&config.disabled_providers).contains(provider_id) {
         return Err(format!(
             "generated tool `{}` provider `{provider_id}` is disabled",
             definition.name
         ));
     }
-    if !config.trusted_providers.contains(provider_id) {
+    if !normalize_provider_set(&config.trusted_providers).contains(provider_id) {
         return Err(format!(
             "generated tool `{}` provider `{provider_id}` is not trusted",
             definition.name
@@ -359,6 +371,44 @@ fn trim_option(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn normalize_optional_provider_id(value: Option<String>) -> Option<String> {
+    trim_option(value).map(|value| normalize_provider_id(&value).unwrap_or(value))
+}
+
+fn normalize_provider_set(values: &BTreeSet<String>) -> BTreeSet<String> {
+    values
+        .iter()
+        .filter_map(|value| normalize_provider_id(value))
+        .collect()
+}
+
+fn normalize_provider_id(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    let valid = normalized
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_' | '.'));
+    if !valid {
+        return None;
+    }
+    let starts_or_ends_with_sep = normalized
+        .chars()
+        .next()
+        .zip(normalized.chars().last())
+        .map(|(first, last)| is_provider_separator(first) || is_provider_separator(last))
+        .unwrap_or(true);
+    if starts_or_ends_with_sep {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn is_provider_separator(ch: char) -> bool {
+    matches!(ch, '-' | '_' | '.')
 }
 
 fn is_safe_generated_tool_name(name: &str) -> bool {
@@ -503,6 +553,37 @@ mod tests {
 
         assert_eq!(report.admitted.len(), 1);
         assert!(report.rejected.is_empty());
+    }
+
+    #[test]
+    fn admission_normalizes_provider_ids_before_policy_checks() {
+        let mut definition = sample_definition();
+        definition.provider_id = Some(" Trusted.Runtime ".into());
+        let config = GeneratedToolAdmissionConfig {
+            enforce_provenance: true,
+            trusted_providers: BTreeSet::from(["TRUSTED.RUNTIME".to_string()]),
+            ..Default::default()
+        };
+
+        let report = admit_generated_tool_definitions(vec![definition], &config);
+
+        assert_eq!(report.admitted.len(), 1);
+        assert!(report.rejected.is_empty());
+        assert_eq!(
+            report.admitted[0].provider_id.as_deref(),
+            Some("trusted.runtime")
+        );
+    }
+
+    #[test]
+    fn admission_rejects_invalid_provider_ids_when_enforced() {
+        let mut definition = sample_definition();
+        definition.provider_id = Some("bad/provider".into());
+
+        let report = admit_generated_tool_definitions(vec![definition], &admission_config());
+
+        assert!(report.admitted.is_empty());
+        assert!(report.rejected[0].reason.contains("invalid provider_id"));
     }
 
     #[test]
