@@ -1371,9 +1371,6 @@ const CAPABILITIES: &[Capability] = &[
             destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
-            destinations: &[],
-        }),
-    },
     // ── Update ──────────────────────────────────────────────────────────────
     Capability {
         id: "update.check",
