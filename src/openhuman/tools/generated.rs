@@ -15,21 +15,34 @@ use crate::openhuman::tools::traits::{PermissionLevel, Tool, ToolCategory, ToolR
 
 #[derive(Debug, Clone)]
 pub struct GeneratedToolDefinition {
+    /// Stable tool name exposed to the model.
     pub name: String,
+    /// Human-readable tool description.
     pub description: String,
+    /// JSON schema for tool arguments.
     pub parameters_schema: Value,
+    /// Permission required to execute this tool.
     pub permission_level: PermissionLevel,
+    /// Tool category used for agent/tool scoping.
     pub category: ToolCategory,
+    /// Execution surface where the tool is available.
     pub scope: ToolScope,
+    /// Adapter responsible for executing the generated tool.
     pub adapter_id: String,
+    /// Provider that produced this generated tool.
     pub provider_id: Option<String>,
+    /// Provider-scoped capability id for policy and revocation.
     pub capability_id: Option<String>,
+    /// Digest of the source capability definition.
     pub source_digest: Option<String>,
+    /// Declared runtime risk for policy and approval.
     pub risk: Option<GeneratedToolRisk>,
+    /// Optional policy namespace/surface label.
     pub policy_surface: Option<String>,
 }
 
 impl GeneratedToolDefinition {
+    /// Build a generated tool definition with legacy-safe defaults.
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
@@ -56,44 +69,60 @@ impl GeneratedToolDefinition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeneratedToolRisk {
+    /// Read-only capability.
     Read,
+    /// Local or internal write capability.
     Write,
+    /// Externally observable write capability.
     ExternalWrite,
+    /// Code or command execution capability.
     Execute,
+    /// High-risk or destructive capability.
     Dangerous,
 }
 
 impl GeneratedToolRisk {
     fn is_external_effect(self) -> bool {
-        matches!(self, Self::ExternalWrite | Self::Dangerous)
+        matches!(self, Self::ExternalWrite | Self::Execute | Self::Dangerous)
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GeneratedToolAdmissionConfig {
+    /// Whether provenance fields are required for admission.
     pub enforce_provenance: bool,
+    /// Provider ids allowed to register generated tools.
     pub trusted_providers: BTreeSet<String>,
+    /// Provider ids blocked from registration.
     pub disabled_providers: BTreeSet<String>,
+    /// Capability ids blocked from registration.
     pub disabled_capabilities: BTreeSet<String>,
+    /// Existing tool names reserved before this admission pass.
     pub existing_tool_names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedToolAdmissionRejection {
+    /// Tool name rejected during admission.
     pub tool_name: String,
+    /// Human-readable rejection reason.
     pub reason: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct GeneratedToolAdmissionReport {
+    /// Definitions accepted for registration.
     pub admitted: Vec<GeneratedToolDefinition>,
+    /// Definitions rejected before registration.
     pub rejected: Vec<GeneratedToolAdmissionRejection>,
 }
 
 #[async_trait]
 pub trait GeneratedToolAdapter: Send + Sync {
+    /// Stable adapter id matched against generated definitions.
     fn id(&self) -> &str;
 
+    /// Execute a generated tool definition with validated arguments.
     async fn execute(
         &self,
         definition: &GeneratedToolDefinition,
@@ -101,12 +130,14 @@ pub trait GeneratedToolAdapter: Send + Sync {
     ) -> anyhow::Result<ToolResult>;
 }
 
+/// Executable wrapper around a generated tool definition and adapter.
 pub struct GeneratedTool {
     definition: GeneratedToolDefinition,
     adapter: Arc<dyn GeneratedToolAdapter>,
 }
 
 impl GeneratedTool {
+    /// Create a generated tool wrapper after validation.
     pub fn new(
         mut definition: GeneratedToolDefinition,
         adapter: Arc<dyn GeneratedToolAdapter>,
@@ -139,6 +170,7 @@ impl GeneratedTool {
         })
     }
 
+    /// Borrow the normalized generated tool definition.
     pub fn definition(&self) -> &GeneratedToolDefinition {
         &self.definition
     }
@@ -182,6 +214,7 @@ impl Tool for GeneratedTool {
     }
 }
 
+/// Convert generated definitions into boxed tool trait objects.
 pub fn generated_tools_from_definitions(
     definitions: Vec<GeneratedToolDefinition>,
     adapter: Arc<dyn GeneratedToolAdapter>,
@@ -195,6 +228,7 @@ pub fn generated_tools_from_definitions(
         .collect()
 }
 
+/// Admit generated tool definitions according to provenance policy.
 pub fn admit_generated_tool_definitions(
     definitions: Vec<GeneratedToolDefinition>,
     config: &GeneratedToolAdmissionConfig,
@@ -207,8 +241,25 @@ pub fn admit_generated_tool_definitions(
         normalize_definition(&mut definition);
         let tool_name = definition.name.clone();
         match validate_admission(&definition, config, &mut seen) {
-            Ok(()) => admitted.push(definition),
-            Err(reason) => rejected.push(GeneratedToolAdmissionRejection { tool_name, reason }),
+            Ok(()) => {
+                log::debug!(
+                    "[generated_tools] admission accepted tool_name={} provider_id={:?} capability_id={:?}",
+                    definition.name,
+                    definition.provider_id,
+                    definition.capability_id
+                );
+                admitted.push(definition);
+            }
+            Err(reason) => {
+                log::debug!(
+                    "[generated_tools] admission rejected tool_name={} provider_id={:?} capability_id={:?} reason={}",
+                    tool_name,
+                    definition.provider_id,
+                    definition.capability_id,
+                    reason
+                );
+                rejected.push(GeneratedToolAdmissionRejection { tool_name, reason });
+            }
         }
     }
 
@@ -518,6 +569,15 @@ mod tests {
     #[tokio::test]
     async fn generated_tool_marks_external_risk_as_external_effect() {
         let tool = GeneratedTool::new(sample_definition(), Arc::new(EchoAdapter)).unwrap();
+
+        assert!(tool.external_effect());
+    }
+
+    #[tokio::test]
+    async fn generated_tool_marks_execute_risk_as_external_effect() {
+        let mut definition = sample_definition();
+        definition.risk = Some(GeneratedToolRisk::Execute);
+        let tool = GeneratedTool::new(definition, Arc::new(EchoAdapter)).unwrap();
 
         assert!(tool.external_effect());
     }
