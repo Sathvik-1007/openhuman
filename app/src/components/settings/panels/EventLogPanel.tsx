@@ -110,7 +110,6 @@ const EventLogPanel = () => {
     return () => {
       controllerRef.current?.abort();
       controllerRef.current = null;
-      setIsLive(false);
     };
   }, [connect]);
 

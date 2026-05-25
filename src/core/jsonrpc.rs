@@ -1241,6 +1241,7 @@ async fn domain_events_handler(headers: axum::http::HeaderMap) -> Response {
             // Extract variant name only (strip payload fields to avoid PII leak)
             let event_name = variant
                 .split_once('{')
+                .or_else(|| variant.split_once('('))
                 .or_else(|| variant.split_once(' '))
                 .map(|(name, _)| name.trim())
                 .unwrap_or(&variant);
