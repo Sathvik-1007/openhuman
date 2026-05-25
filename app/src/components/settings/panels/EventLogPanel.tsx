@@ -1,0 +1,247 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { useT } from '../../../lib/i18n/I18nContext';
+import { getCoreHttpBaseUrl, getCoreRpcToken } from '../../../services/coreRpcClient';
+import SettingsHeader from '../components/SettingsHeader';
+import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
+
+interface EventEntry {
+  id: number;
+  domain: string;
+  event: string;
+  timestamp: string;
+}
+
+const DOMAIN_BADGE_KEYS: Record<string, string> = {
+  tool: 'settings.developerMenu.eventLog.badge.tool',
+  agent: 'settings.developerMenu.eventLog.badge.agent',
+  system: 'settings.developerMenu.eventLog.badge.info',
+  memory: 'settings.developerMenu.eventLog.badge.mem',
+  channel: 'settings.developerMenu.eventLog.badge.chan',
+  cron: 'settings.developerMenu.eventLog.badge.cron',
+  webhook: 'settings.developerMenu.eventLog.badge.hook',
+  approval: 'settings.developerMenu.eventLog.badge.warn',
+  skill: 'settings.developerMenu.eventLog.badge.skill',
+  composio: 'settings.developerMenu.eventLog.badge.comp',
+  mcp_client: 'settings.developerMenu.eventLog.badge.mcp',
+};
+
+const MAX_ENTRIES = 200;
+
+const EventLogPanel = () => {
+  const { t } = useT();
+  const { navigateBack, breadcrumbs } = useSettingsNavigation();
+  const [entries, setEntries] = useState<EventEntry[]>([]);
+  const [isLive, setIsLive] = useState(false);
+  const [filterType, setFilterType] = useState<string>('');
+  const [filterText, setFilterText] = useState('');
+  const [autoScroll, setAutoScroll] = useState(true);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const idRef = useRef(0);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  const connect = useCallback(async () => {
+    try {
+      const [baseUrl, token] = await Promise.all([getCoreHttpBaseUrl(), getCoreRpcToken()]);
+      if (!token) {
+        setIsLive(false);
+        return;
+      }
+
+      const url = `${baseUrl}/events/domain`;
+      const controller = new AbortController();
+      controllerRef.current = controller;
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        setIsLive(false);
+        return;
+      }
+
+      setIsLive(true);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            const jsonStr = line.slice(5).trim();
+            if (!jsonStr) continue;
+            try {
+              const data = JSON.parse(jsonStr);
+              const entry: EventEntry = {
+                id: ++idRef.current,
+                domain: data.domain || 'unknown',
+                event: data.event || '',
+                timestamp: data.timestamp || '',
+              };
+              setEntries(prev => {
+                const next = [entry, ...prev];
+                return next.length > MAX_ENTRIES ? next.slice(0, MAX_ENTRIES) : next;
+              });
+            } catch {
+              // skip malformed
+            }
+          }
+        }
+      }
+    } catch {
+      setIsLive(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void connect();
+    return () => {
+      controllerRef.current?.abort();
+      controllerRef.current = null;
+      setIsLive(false);
+    };
+  }, [connect]);
+
+  useEffect(() => {
+    if (autoScroll && containerRef.current) {
+      containerRef.current.scrollTop = 0;
+    }
+  }, [entries, autoScroll]);
+
+  const handleScroll = () => {
+    if (!containerRef.current) return;
+    setAutoScroll(containerRef.current.scrollTop < 10);
+  };
+
+  const filteredEntries = entries.filter(e => {
+    if (filterType && e.domain !== filterType) return false;
+    if (filterText && !e.event.toLowerCase().includes(filterText.toLowerCase())) return false;
+    return true;
+  });
+
+  const exportLog = () => {
+    const blob = new Blob([filteredEntries.map(e => JSON.stringify(e)).join('\n')], {
+      type: 'application/x-ndjson',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `event-log-${new Date().toISOString().slice(0, 19)}.ndjson`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const domains = [...new Set(entries.map(e => e.domain))].sort();
+
+  return (
+    <div data-testid="event-log-panel">
+      <SettingsHeader
+        title={t('settings.developerMenu.eventLog.title')}
+        showBackButton={true}
+        onBack={navigateBack}
+        breadcrumbs={breadcrumbs}
+      />
+
+      <div className="p-4 space-y-4">
+        {/* Status bar */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <select
+            className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-1.5 font-medium text-stone-700 dark:text-neutral-200"
+            value={filterType}
+            onChange={e => setFilterType(e.target.value)}>
+            <option value="">{t('settings.developerMenu.eventLog.allTypes')}</option>
+            {domains.map(d => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-1.5 font-medium text-stone-700 dark:text-neutral-200 w-40"
+            placeholder={t('settings.developerMenu.eventLog.filterAgent')}
+            value={filterText}
+            onChange={e => setFilterText(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={exportLog}
+            disabled={filteredEntries.length === 0}
+            className="rounded-lg border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-1.5 font-medium text-stone-700 dark:text-neutral-200 hover:bg-stone-100 dark:hover:bg-neutral-800 disabled:opacity-50">
+            {t('settings.developerMenu.eventLog.download')}
+          </button>
+          <span className="text-stone-500 dark:text-neutral-400">
+            {filteredEntries.length} {t('settings.developerMenu.eventLog.events')} &middot;{' '}
+            <span
+              className={
+                isLive
+                  ? 'text-sage-600 dark:text-sage-300'
+                  : 'text-stone-400 dark:text-neutral-500'
+              }>
+              {isLive
+                ? t('settings.developerMenu.eventLog.live')
+                : t('settings.developerMenu.eventLog.disconnected')}
+            </span>
+          </span>
+        </div>
+
+        {/* Jump to latest */}
+        {!autoScroll && (
+          <button
+            type="button"
+            onClick={() => {
+              setAutoScroll(true);
+              if (containerRef.current) containerRef.current.scrollTop = 0;
+            }}
+            className="text-xs rounded-lg border border-primary-300 dark:border-primary-500/40 bg-primary-50 dark:bg-primary-500/10 px-3 py-1 text-primary-700 dark:text-primary-300">
+            {t('settings.developerMenu.eventLog.jumpToLatest')}
+          </button>
+        )}
+
+        {/* Event stream */}
+        <section className="space-y-1">
+          <div
+            ref={containerRef}
+            onScroll={handleScroll}
+            className="max-h-[60vh] overflow-y-auto space-y-1">
+            {filteredEntries.length === 0 && (
+              <p className="text-xs text-stone-400 dark:text-neutral-500 py-4 text-center">
+                {isLive
+                  ? t('settings.developerMenu.eventLog.waiting')
+                  : t('settings.developerMenu.eventLog.notConnected')}
+              </p>
+            )}
+            {filteredEntries.map(entry => (
+              <div
+                key={entry.id}
+                className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-2 flex items-start gap-2">
+                <span className="text-[10px] text-stone-400 dark:text-neutral-500 font-mono shrink-0 pt-0.5">
+                  {entry.timestamp}
+                </span>
+                <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-[10px] text-stone-600 dark:text-neutral-300 shrink-0">
+                  {DOMAIN_BADGE_KEYS[entry.domain]
+                    ? t(DOMAIN_BADGE_KEYS[entry.domain])
+                    : entry.domain.toUpperCase()}
+                </span>
+                <span className="text-xs text-stone-900 dark:text-neutral-100 truncate">
+                  {entry.event}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+};
+
+export default EventLogPanel;

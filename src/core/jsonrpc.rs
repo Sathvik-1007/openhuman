@@ -862,6 +862,7 @@ pub fn build_core_http_router(socketio_enabled: bool) -> Router {
         .route("/schema", get(schema_handler))
         .route("/events", get(events_handler))
         .route("/events/webhooks", get(webhook_events_handler))
+        .route("/events/domain", get(domain_events_handler))
         .route("/rpc", post(rpc_handler))
         .route("/ws/dictation", get(dictation_ws_handler))
         .route("/auth", get(desktop_auth_handler))
@@ -1183,6 +1184,78 @@ async fn webhook_events_handler() -> Response {
     ));
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10)))
+        .into_response()
+}
+
+/// SSE endpoint streaming DomainEvent bus events for the live event log panel.
+///
+/// Requires bearer auth. Streams all domain events as JSON with event type
+/// set to the domain name (agent, tool, memory, etc.).
+async fn domain_events_handler(headers: axum::http::HeaderMap) -> Response {
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let bearer_ok = bearer
+        .map(crate::core::auth::verify_bearer_token)
+        .unwrap_or(false);
+
+    if !bearer_ok {
+        log::warn!("[events/domain] reject subscribe: missing or invalid bearer token");
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "ok": false,
+                "error": "unauthorized",
+                "message": "Bearer token required for domain event stream"
+            })),
+        )
+            .into_response();
+    }
+
+    let bus = match crate::core::event_bus::global() {
+        Some(bus) => bus,
+        None => {
+            log::warn!("[events/domain] event bus not initialized");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "ok": false, "error": "event bus not initialized" })),
+            )
+                .into_response();
+        }
+    };
+
+    log::debug!("[events/domain] client connected, streaming domain events");
+
+    let rx = bus.raw_receiver();
+    let stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(
+        |item| -> Option<Result<Event, std::convert::Infallible>> {
+            let event = match item {
+                Ok(ev) => ev,
+                Err(_) => return None,
+            };
+            let domain = event.domain().to_string();
+            let variant = format!("{:?}", event);
+            // Extract variant name only (strip payload fields to avoid PII leak)
+            let event_name = variant
+                .split_once('{')
+                .or_else(|| variant.split_once(' '))
+                .map(|(name, _)| name.trim())
+                .unwrap_or(&variant);
+            let data = json!({
+                "domain": domain,
+                "event": event_name,
+                "timestamp": chrono::Utc::now().format("%H:%M:%S").to_string(),
+            });
+            let data_str = serde_json::to_string(&data).ok()?;
+            Some(Ok(Event::default().event(domain).data(data_str)))
+        },
+    );
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(5)))
         .into_response()
 }
 

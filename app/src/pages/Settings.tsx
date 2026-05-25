@@ -18,6 +18,7 @@ import CronJobsPanel from '../components/settings/panels/CronJobsPanel';
 import DeveloperOptionsPanel from '../components/settings/panels/DeveloperOptionsPanel';
 import DevicesComingSoonPanel from '../components/settings/panels/DevicesComingSoonPanel';
 import EmbeddingsPanel from '../components/settings/panels/EmbeddingsPanel';
+import EventLogPanel from '../components/settings/panels/EventLogPanel';
 import HeartbeatPanel from '../components/settings/panels/HeartbeatPanel';
 import LedgerUsagePanel from '../components/settings/panels/LedgerUsagePanel';
 import LocalModelDebugPanel from '../components/settings/panels/LocalModelDebugPanel';
@@ -447,6 +448,7 @@ const Settings = () => {
         <Route path="voice-debug" element={wrapSettingsPage(<VoiceDebugPanel />)} />
         <Route path="local-model-debug" element={wrapSettingsPage(<LocalModelDebugPanel />)} />
         <Route path="webhooks-debug" element={wrapSettingsPage(<WebhooksDebugPanel />)} />
+        <Route path="event-log" element={wrapSettingsPage(<EventLogPanel />)} />
         <Route path="memory-data" element={wrapSettingsPage(<MemoryDataPanel />)} />
         <Route path="memory-debug" element={wrapSettingsPage(<MemoryDebugPanel />)} />
         <Route path="intelligence" element={<Intelligence />} />
