@@ -97,8 +97,11 @@ const EventLogPanel = () => {
           }
         }
       }
+      setIsLive(false);
     } catch {
       setIsLive(false);
+    } finally {
+      controllerRef.current = null;
     }
   }, []);
 
@@ -183,9 +186,7 @@ const EventLogPanel = () => {
             {filteredEntries.length} {t('settings.developerMenu.eventLog.events')} &middot;{' '}
             <span
               className={
-                isLive
-                  ? 'text-sage-600 dark:text-sage-300'
-                  : 'text-stone-400 dark:text-neutral-500'
+                isLive ? 'text-sage-600 dark:text-sage-300' : 'text-stone-400 dark:text-neutral-500'
               }>
               {isLive
                 ? t('settings.developerMenu.eventLog.live')
