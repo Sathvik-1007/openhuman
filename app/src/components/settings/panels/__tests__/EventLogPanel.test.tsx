@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '../../../../test/test-utils';
@@ -107,5 +107,72 @@ describe('EventLogPanel', () => {
       expect(screen.getByText('settings.developerMenu.eventLog.notConnected')).toBeTruthy();
     });
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('exports filtered events as ndjson', async () => {
+    mockFetchSSE([{ domain: 'tool', event: 'ToolExport' }]);
+    renderWithProviders(<EventLogPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('ToolExport')).toBeTruthy();
+    });
+
+    const createObjectURL = vi.fn().mockReturnValue('blob:test');
+    const revokeObjectURL = vi.fn();
+    global.URL.createObjectURL = createObjectURL;
+    global.URL.revokeObjectURL = revokeObjectURL;
+
+    const downloadBtn = screen.getByText('settings.developerMenu.eventLog.download');
+    fireEvent.click(downloadBtn);
+
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test');
+  });
+
+  it('filters events by text input', async () => {
+    mockFetchSSE([
+      { domain: 'tool', event: 'ToolMatch' },
+      { domain: 'tool', event: 'Other' },
+    ]);
+    renderWithProviders(<EventLogPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('ToolMatch')).toBeTruthy();
+    });
+
+    const input = screen.getByPlaceholderText('settings.developerMenu.eventLog.filterAgent');
+    fireEvent.change(input, { target: { value: 'Match' } });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Other')).toBeNull();
+    });
+  });
+
+  it('renders unknown domain as uppercase text', async () => {
+    mockFetchSSE([{ domain: 'custom_thing', event: 'Evt' }]);
+    renderWithProviders(<EventLogPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('CUSTOM_THING')).toBeTruthy();
+    });
+  });
+
+  it('handles scroll and shows jump-to-latest button', async () => {
+    mockFetchSSE([{ domain: 'tool', event: 'ScrollTest' }]);
+    const { container } = renderWithProviders(<EventLogPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText('ScrollTest')).toBeTruthy();
+    });
+
+    const scrollDiv = container.querySelector('.max-h-\\[60vh\\]')!;
+    Object.defineProperty(scrollDiv, 'scrollTop', { value: 100, writable: true });
+    fireEvent.scroll(scrollDiv);
+
+    await waitFor(() => {
+      expect(screen.getByText('settings.developerMenu.eventLog.jumpToLatest')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText('settings.developerMenu.eventLog.jumpToLatest'));
   });
 });
