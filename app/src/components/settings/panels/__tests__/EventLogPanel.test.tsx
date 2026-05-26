@@ -13,9 +13,7 @@ vi.mock('../../hooks/useSettingsNavigation', () => ({
   useSettingsNavigation: () => ({ navigateBack: vi.fn(), breadcrumbs: [] }),
 }));
 
-vi.mock('../../../../lib/i18n/I18nContext', () => ({
-  useT: () => ({ t: (k: string) => k }),
-}));
+vi.mock('../../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
 
 function mockFetchSSE(events: Array<{ domain: string; event: string }>) {
   const lines = events.map(e => `data:${JSON.stringify({ ...e, timestamp: '12:00:00' })}\n`);
@@ -27,10 +25,7 @@ function mockFetchSSE(events: Array<{ domain: string; event: string }>) {
       controller.close();
     },
   });
-  global.fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    body: stream,
-  });
+  global.fetch = vi.fn().mockResolvedValue({ ok: true, body: stream });
 }
 
 describe('EventLogPanel', () => {
@@ -42,9 +37,7 @@ describe('EventLogPanel', () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, body: null });
     renderWithProviders(<EventLogPanel />);
     expect(screen.getByTestId('event-log-panel')).toBeTruthy();
-    expect(
-      screen.getByText('settings.developerMenu.eventLog.allTypes')
-    ).toBeTruthy();
+    expect(screen.getByText('settings.developerMenu.eventLog.allTypes')).toBeTruthy();
   });
 
   it('shows waiting message when connected but no events', async () => {
@@ -57,9 +50,7 @@ describe('EventLogPanel', () => {
     renderWithProviders(<EventLogPanel />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText('settings.developerMenu.eventLog.waiting')
-      ).toBeTruthy();
+      expect(screen.getByText('settings.developerMenu.eventLog.waiting')).toBeTruthy();
     });
   });
 
@@ -75,12 +66,8 @@ describe('EventLogPanel', () => {
       expect(screen.getByText('AgentStarted')).toBeTruthy();
     });
 
-    expect(
-      screen.getByText('settings.developerMenu.eventLog.badge.tool')
-    ).toBeTruthy();
-    expect(
-      screen.getByText('settings.developerMenu.eventLog.badge.agent')
-    ).toBeTruthy();
+    expect(screen.getByText('settings.developerMenu.eventLog.badge.tool')).toBeTruthy();
+    expect(screen.getByText('settings.developerMenu.eventLog.badge.agent')).toBeTruthy();
   });
 
   it('shows disconnected state when fetch fails', async () => {
@@ -88,9 +75,7 @@ describe('EventLogPanel', () => {
     renderWithProviders(<EventLogPanel />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText('settings.developerMenu.eventLog.disconnected')
-      ).toBeTruthy();
+      expect(screen.getByText('settings.developerMenu.eventLog.disconnected')).toBeTruthy();
     });
   });
 
@@ -119,9 +104,7 @@ describe('EventLogPanel', () => {
     renderWithProviders(<EventLogPanel />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText('settings.developerMenu.eventLog.notConnected')
-      ).toBeTruthy();
+      expect(screen.getByText('settings.developerMenu.eventLog.notConnected')).toBeTruthy();
     });
     expect(global.fetch).not.toHaveBeenCalled();
   });
