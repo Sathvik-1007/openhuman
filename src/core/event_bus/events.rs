@@ -805,6 +805,7 @@ impl DomainEvent {
             Self::McpServerDisconnected { .. } => "McpServerDisconnected",
             Self::McpClientToolExecuted { .. } => "McpClientToolExecuted",
             Self::McpSetupSecretRequested { .. } => "McpSetupSecretRequested",
+            Self::EmbeddingModelUnhealthy { .. } => "EmbeddingModelUnhealthy",
         }
     }
 
