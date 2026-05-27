@@ -9,6 +9,7 @@ interface EventEntry {
   id: number;
   domain: string;
   event: string;
+  agent: string;
   timestamp: string;
 }
 
@@ -26,7 +27,22 @@ const DOMAIN_BADGE_KEYS: Record<string, string> = {
   mcp_client: 'settings.developerMenu.eventLog.badge.mcp',
 };
 
+const DOMAIN_BADGE_COLORS: Record<string, { bg: string; text: string }> = {
+  tool: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
+  agent: { bg: 'bg-green-500/20', text: 'text-green-400' },
+  system: { bg: 'bg-slate-500/20', text: 'text-slate-400' },
+  memory: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
+  channel: { bg: 'bg-cyan-500/20', text: 'text-cyan-400' },
+  cron: { bg: 'bg-orange-500/20', text: 'text-orange-400' },
+  webhook: { bg: 'bg-indigo-500/20', text: 'text-indigo-400' },
+  approval: { bg: 'bg-amber-500/20', text: 'text-amber-400' },
+  skill: { bg: 'bg-teal-500/20', text: 'text-teal-400' },
+  composio: { bg: 'bg-pink-500/20', text: 'text-pink-400' },
+  mcp_client: { bg: 'bg-violet-500/20', text: 'text-violet-400' },
+};
+
 const MAX_ENTRIES = 200;
+const RECONNECT_DELAY_MS = 3000;
 
 const EventLogPanel = () => {
   const { t } = useT();
@@ -39,8 +55,11 @@ const EventLogPanel = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const idRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
 
   const connect = useCallback(async () => {
+    if (unmountedRef.current) return;
     try {
       const [baseUrl, token] = await Promise.all([getCoreHttpBaseUrl(), getCoreRpcToken()]);
       if (!token) {
@@ -85,6 +104,7 @@ const EventLogPanel = () => {
                 id: ++idRef.current,
                 domain: data.domain || 'unknown',
                 event: data.event || '',
+                agent: data.agent || '',
                 timestamp: data.timestamp || '',
               };
               setEntries(prev => {
@@ -102,14 +122,24 @@ const EventLogPanel = () => {
       setIsLive(false);
     } finally {
       controllerRef.current = null;
+      // Auto-reconnect unless unmounted
+      if (!unmountedRef.current) {
+        reconnectRef.current = setTimeout(() => void connect(), RECONNECT_DELAY_MS);
+      }
     }
   }, []);
 
   useEffect(() => {
+    unmountedRef.current = false;
     void connect();
     return () => {
+      unmountedRef.current = true;
       controllerRef.current?.abort();
       controllerRef.current = null;
+      if (reconnectRef.current) {
+        clearTimeout(reconnectRef.current);
+        reconnectRef.current = null;
+      }
     };
   }, [connect]);
 
@@ -126,7 +156,10 @@ const EventLogPanel = () => {
 
   const filteredEntries = entries.filter(e => {
     if (filterType && e.domain !== filterType) return false;
-    if (filterText && !e.event.toLowerCase().includes(filterText.toLowerCase())) return false;
+    if (filterText) {
+      const q = filterText.toLowerCase();
+      if (!e.event.toLowerCase().includes(q) && !e.agent.toLowerCase().includes(q)) return false;
+    }
     return true;
   });
 
@@ -220,23 +253,35 @@ const EventLogPanel = () => {
                   : t('settings.developerMenu.eventLog.notConnected')}
               </p>
             )}
-            {filteredEntries.map(entry => (
-              <div
-                key={entry.id}
-                className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-2 flex items-start gap-2">
-                <span className="text-[10px] text-stone-400 dark:text-neutral-500 font-mono shrink-0 pt-0.5">
-                  {entry.timestamp}
-                </span>
-                <span className="rounded-full bg-stone-200 dark:bg-neutral-800 px-2 py-0.5 text-[10px] text-stone-600 dark:text-neutral-300 shrink-0">
-                  {DOMAIN_BADGE_KEYS[entry.domain]
-                    ? t(DOMAIN_BADGE_KEYS[entry.domain])
-                    : entry.domain.toUpperCase()}
-                </span>
-                <span className="text-xs text-stone-900 dark:text-neutral-100 truncate">
-                  {entry.event}
-                </span>
-              </div>
-            ))}
+            {filteredEntries.map(entry => {
+              const colors = DOMAIN_BADGE_COLORS[entry.domain] || {
+                bg: 'bg-stone-500/20',
+                text: 'text-stone-400',
+              };
+              return (
+                <div
+                  key={entry.id}
+                  className="rounded-xl border border-stone-200 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 px-3 py-2 flex items-start gap-2">
+                  <span className="text-[10px] text-stone-400 dark:text-neutral-500 font-mono shrink-0 pt-0.5">
+                    {entry.timestamp}
+                  </span>
+                  <span
+                    className={`rounded-full ${colors.bg} px-2 py-0.5 text-[10px] ${colors.text} shrink-0`}>
+                    {DOMAIN_BADGE_KEYS[entry.domain]
+                      ? t(DOMAIN_BADGE_KEYS[entry.domain])
+                      : entry.domain.toUpperCase()}
+                  </span>
+                  {entry.agent && (
+                    <span className="text-[10px] text-stone-500 dark:text-neutral-400 shrink-0 font-mono">
+                      {entry.agent}
+                    </span>
+                  )}
+                  <span className="text-xs text-stone-900 dark:text-neutral-100 truncate">
+                    {entry.event}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </section>
       </div>

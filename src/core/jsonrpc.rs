@@ -1237,17 +1237,12 @@ async fn domain_events_handler(headers: axum::http::HeaderMap) -> Response {
                 Err(_) => return None,
             };
             let domain = event.domain().to_string();
-            let variant = format!("{:?}", event);
-            // Extract variant name only (strip payload fields to avoid PII leak)
-            let event_name = variant
-                .split_once('{')
-                .or_else(|| variant.split_once('('))
-                .or_else(|| variant.split_once(' '))
-                .map(|(name, _)| name.trim())
-                .unwrap_or(&variant);
+            let event_name = event.variant_name();
+            let agent = event.agent_hint().unwrap_or("").to_string();
             let data = json!({
                 "domain": domain,
                 "event": event_name,
+                "agent": agent,
                 "timestamp": chrono::Utc::now().format("%H:%M:%S").to_string(),
             });
             let data_str = serde_json::to_string(&data).ok()?;
