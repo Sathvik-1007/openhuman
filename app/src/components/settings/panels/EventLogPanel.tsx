@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import { getCoreHttpBaseUrl, getCoreRpcToken } from '../../../services/coreRpcClient';
@@ -58,7 +58,9 @@ const EventLogPanel = () => {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
 
-  const connect = useCallback(async () => {
+  const connectRef = useRef<(() => Promise<void>) | null>(null);
+
+  const connect = async () => {
     if (unmountedRef.current) return;
     try {
       const [baseUrl, token] = await Promise.all([getCoreHttpBaseUrl(), getCoreRpcToken()]);
@@ -124,14 +126,16 @@ const EventLogPanel = () => {
       controllerRef.current = null;
       // Auto-reconnect unless unmounted
       if (!unmountedRef.current) {
-        reconnectRef.current = setTimeout(() => void connect(), RECONNECT_DELAY_MS);
+        reconnectRef.current = setTimeout(() => void connectRef.current?.(), RECONNECT_DELAY_MS);
       }
     }
-  }, []);
+  };
+
+  connectRef.current = connect;
 
   useEffect(() => {
     unmountedRef.current = false;
-    void connect();
+    void connectRef.current?.();
     return () => {
       unmountedRef.current = true;
       controllerRef.current?.abort();
@@ -141,7 +145,7 @@ const EventLogPanel = () => {
         reconnectRef.current = null;
       }
     };
-  }, [connect]);
+  }, []);
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
