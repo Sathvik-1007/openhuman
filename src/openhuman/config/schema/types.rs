@@ -77,6 +77,9 @@ pub struct Config {
     pub temperature_unsupported_models: Vec<String>,
 
     #[serde(default)]
+    pub dashboard: DashboardConfig,
+
+    #[serde(default)]
     pub observability: ObservabilityConfig,
 
     #[serde(default)]
@@ -592,6 +595,7 @@ impl Default for Config {
             output_language: None,
             temperature_unsupported_models: default_temperature_unsupported_models(),
             observability: ObservabilityConfig::default(),
+            dashboard: DashboardConfig::default(),
             autonomy: AutonomyConfig::default(),
             runtime: RuntimeConfig::default(),
             screen_intelligence: ScreenIntelligenceConfig::default(),

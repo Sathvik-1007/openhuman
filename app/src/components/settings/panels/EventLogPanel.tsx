@@ -57,6 +57,8 @@ const EventLogPanel = () => {
   const controllerRef = useRef<AbortController | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  const maxEntriesRef = useRef(MAX_ENTRIES);
+  const newEntriesRef = useRef<'top' | 'bottom'>('top');
 
   const connectRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -97,11 +99,26 @@ const EventLogPanel = () => {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
+          if (line.startsWith('event:')) {
+            const eventType = line.slice(6).trim();
+            if (eventType === 'config') {
+              // Next data: line is config — handled below
+              continue;
+            }
+          }
           if (line.startsWith('data:')) {
             const jsonStr = line.slice(5).trim();
             if (!jsonStr) continue;
             try {
               const data = JSON.parse(jsonStr);
+              // Config message from server
+              if (data.max_entries !== undefined) {
+                maxEntriesRef.current = data.max_entries;
+                if (data.new_entries === 'top' || data.new_entries === 'bottom') {
+                  newEntriesRef.current = data.new_entries;
+                }
+                continue;
+              }
               const entry: EventEntry = {
                 id: ++idRef.current,
                 domain: data.domain || 'unknown',
@@ -110,8 +127,12 @@ const EventLogPanel = () => {
                 timestamp: data.timestamp || '',
               };
               setEntries(prev => {
-                const next = [entry, ...prev];
-                return next.length > MAX_ENTRIES ? next.slice(0, MAX_ENTRIES) : next;
+                const next = newEntriesRef.current === 'top' ? [entry, ...prev] : [...prev, entry];
+                return next.length > maxEntriesRef.current
+                  ? newEntriesRef.current === 'top'
+                    ? next.slice(0, maxEntriesRef.current)
+                    : next.slice(-maxEntriesRef.current)
+                  : next;
               });
             } catch {
               // skip malformed

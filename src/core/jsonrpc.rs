@@ -1215,6 +1215,20 @@ async fn domain_events_handler(headers: axum::http::HeaderMap) -> Response {
             .into_response();
     }
 
+    // Read dashboard config for event stream settings.
+    let es_cfg = crate::openhuman::config::rpc::load_config_with_timeout()
+        .await
+        .map(|c| c.dashboard.event_stream)
+        .unwrap_or_default();
+
+    if !es_cfg.enabled {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": "event stream disabled by config" })),
+        )
+            .into_response();
+    }
+
     let bus = match crate::core::event_bus::global() {
         Some(bus) => bus,
         None => {
@@ -1229,8 +1243,17 @@ async fn domain_events_handler(headers: axum::http::HeaderMap) -> Response {
 
     log::debug!("[events/domain] client connected, streaming domain events");
 
+    // Send config as first SSE event so frontend can apply settings.
+    let config_event = Event::default().event("config").data(
+        serde_json::to_string(&json!({
+            "max_entries": es_cfg.max_entries,
+            "new_entries": es_cfg.new_entries,
+        }))
+        .unwrap_or_default(),
+    );
+
     let rx = bus.raw_receiver();
-    let stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(
+    let event_stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(
         |item| -> Option<Result<Event, std::convert::Infallible>> {
             let event = match item {
                 Ok(ev) => ev,
@@ -1249,6 +1272,10 @@ async fn domain_events_handler(headers: axum::http::HeaderMap) -> Response {
             Some(Ok(Event::default().event(domain).data(data_str)))
         },
     );
+
+    let config_stream =
+        futures::stream::once(async move { Ok::<_, std::convert::Infallible>(config_event) });
+    let stream = config_stream.chain(event_stream);
 
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(5)))
