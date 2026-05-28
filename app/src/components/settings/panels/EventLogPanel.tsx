@@ -170,13 +170,19 @@ const EventLogPanel = () => {
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
-      containerRef.current.scrollTop = 0;
+      const el = containerRef.current;
+      el.scrollTop = newEntriesRef.current === 'top' ? 0 : el.scrollHeight;
     }
   }, [entries, autoScroll]);
 
   const handleScroll = () => {
-    if (!containerRef.current) return;
-    setAutoScroll(containerRef.current.scrollTop < 10);
+    const el = containerRef.current;
+    if (!el) return;
+    const atAnchor =
+      newEntriesRef.current === 'top'
+        ? el.scrollTop < 10
+        : el.scrollHeight - el.scrollTop - el.clientHeight < 10;
+    setAutoScroll(atAnchor);
   };
 
   const filteredEntries = entries.filter(e => {
@@ -258,7 +264,10 @@ const EventLogPanel = () => {
             type="button"
             onClick={() => {
               setAutoScroll(true);
-              if (containerRef.current) containerRef.current.scrollTop = 0;
+              const el = containerRef.current;
+              if (el) {
+                el.scrollTop = newEntriesRef.current === 'top' ? 0 : el.scrollHeight;
+              }
             }}
             className="text-xs rounded-lg border border-primary-300 dark:border-primary-500/40 bg-primary-50 dark:bg-primary-500/10 px-3 py-1 text-primary-700 dark:text-primary-300">
             {t('settings.developerMenu.eventLog.jumpToLatest')}
