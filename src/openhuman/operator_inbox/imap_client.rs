@@ -191,7 +191,7 @@ Body (first 500 chars): {}
 Classification:"#,
         email.from,
         email.subject,
-        &email.body_text[..email.body_text.len().min(500)]
+        crate::openhuman::util::utf8_safe_prefix_at_byte_boundary(&email.body_text, 500)
     )
 }
 
@@ -212,7 +212,7 @@ Body: {}
 Reply (do not include subject line or headers, just the body):"#,
         email.from,
         email.subject,
-        &email.body_text[..email.body_text.len().min(1000)]
+        crate::openhuman::util::utf8_safe_prefix_at_byte_boundary(&email.body_text, 1000)
     )
 }
 
