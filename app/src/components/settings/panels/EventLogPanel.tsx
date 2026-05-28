@@ -201,7 +201,7 @@ const EventLogPanel = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `event-log-${new Date().toISOString().slice(0, 19)}.ndjson`;
+    a.download = `event-log-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.ndjson`;
     a.click();
     URL.revokeObjectURL(url);
   };

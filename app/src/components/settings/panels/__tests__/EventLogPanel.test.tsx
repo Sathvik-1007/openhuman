@@ -91,10 +91,12 @@ describe('EventLogPanel', () => {
     });
 
     const select = container.querySelector('select')!;
-    // Simulate selecting 'tool' filter
-    const event = new Event('change', { bubbles: true });
-    Object.defineProperty(event, 'target', { value: { value: 'tool' } });
-    select.dispatchEvent(event);
+    fireEvent.change(select, { target: { value: 'tool' } });
+
+    await waitFor(() => {
+      expect(screen.queryByText('AgentB')).toBeNull();
+    });
+    expect(screen.getByText('ToolA')).toBeTruthy();
   });
 
   it('shows not connected when token is missing', async () => {
