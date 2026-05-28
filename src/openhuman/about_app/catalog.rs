@@ -1330,13 +1330,15 @@ const CAPABILITIES: &[Capability] = &[
         domain: "voice_actions",
         category: CapabilityCategory::Automation,
         description: "Maps recognized utterances to controller-backed desktop actions with \
-                      safety levels (safe, requires_confirmation, destructive) and execution tracking.",
+                      safety levels (safe, requires_confirmation, destructive) and execution tracking. \
+                      Pattern matching is local; complex utterances fall back to an LLM intent \
+                      extractor via the configured chat provider.",
         how_to: "Recognize via RPC: openhuman.voice_actions_recognize with utterance.",
         status: CapabilityStatus::Beta,
         privacy: Some(CapabilityPrivacy {
-            leaves_device: false,
-            data_kind: PrivacyDataKind::Derived,
-            destinations: &[],
+            leaves_device: true,
+            data_kind: PrivacyDataKind::UserContent,
+            destinations: &["OpenHuman backend", "TinyHumans Neocortex"],
         }),
     },
     // ── Operator Inbox ──────────────────────────────────────────────────────
