@@ -5325,7 +5325,7 @@ dependencies = [
 
 [[package]]
 name = "openhuman"
-version = "0.56.0"
+version = "0.57.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5429,6 +5429,7 @@ dependencies = [
  "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
+ "unicode-normalization",
  "unicode-segmentation",
  "unicode-width",
  "url",
