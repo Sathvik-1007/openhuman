@@ -296,7 +296,9 @@ const ModelHealthPanel = () => {
                     </div>
                   </div>
                   <span className="text-[9px] font-bold text-green-400">
-                    {c.cost_per_1m_output < swapTarget.cost_per_1m_output ? 'CHEAPER' : 'BETTER'}
+                    {c.cost_per_1m_output < swapTarget.cost_per_1m_output
+                      ? t('settings.modelHealth.tag.cheaper')
+                      : t('settings.modelHealth.tag.better')}
                   </span>
                 </div>
               ))}

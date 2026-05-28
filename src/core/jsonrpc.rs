@@ -1206,9 +1206,17 @@ async fn model_health_handler(headers: axum::http::HeaderMap) -> Response {
             .into_response();
     }
 
-    let cfg = crate::openhuman::config::rpc::load_config_with_timeout()
-        .await
-        .unwrap_or_default();
+    let cfg = match crate::openhuman::config::rpc::load_config_with_timeout().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[models/health] config load failed: {e}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"ok": false, "error": "config unavailable"})),
+            )
+                .into_response();
+        }
+    };
     let mh_cfg = &cfg.dashboard.model_health;
     if !mh_cfg.enabled {
         return (

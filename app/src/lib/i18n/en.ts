@@ -3331,6 +3331,8 @@ const en: TranslationMap = {
   'settings.modelHealth.modal.hallucRate': 'Hallucination rate',
   'settings.modelHealth.modal.cancel': 'Cancel',
   'settings.modelHealth.modal.apply': 'Apply Replacement',
+  'settings.modelHealth.tag.cheaper': 'CHEAPER',
+  'settings.modelHealth.tag.better': 'BETTER',
   'settings.screenIntel.permissions.accessibility': 'Accessibility',
   'settings.screenIntel.permissions.grantHint':
     'Grant these permissions in System Settings, then restart the core.',

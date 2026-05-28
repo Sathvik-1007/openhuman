@@ -834,6 +834,8 @@ const it5: TranslationMap = {
   'settings.modelHealth.modal.hallucRate': 'Hallucination rate',
   'settings.modelHealth.modal.cancel': 'Cancel',
   'settings.modelHealth.modal.apply': 'Apply Replacement',
+  'settings.modelHealth.tag.cheaper': 'CHEAPER',
+  'settings.modelHealth.tag.better': 'BETTER',
 };
 
 export default it5;

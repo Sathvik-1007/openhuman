@@ -105,6 +105,9 @@ describe('ModelHealthPanel', () => {
       expect(screen.getByText('deepseek-v3')).toBeTruthy();
     });
     fireEvent.click(screen.getByText('settings.modelHealth.col.cost'));
+    // After sorting by cost asc, first row should be cheapest model (qwen at $0.09)
+    const rows = screen.getAllByRole('row');
+    expect(rows[1].textContent).toContain('qwen-2.5-8b');
   });
 
   it('shows swap button for replace-flagged models', async () => {
