@@ -1,9 +1,12 @@
+import debug from 'debug';
 import { useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
-import { getCoreHttpBaseUrl, getCoreRpcToken } from '../../../services/coreRpcClient';
+import { callCoreRpc } from '../../../services/coreRpcClient';
 import SettingsHeader from '../components/SettingsHeader';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
+
+const log = debug('openhuman:model-health');
 
 interface ModelEntry {
   id: string;
@@ -20,6 +23,25 @@ interface HealthConfig {
   hallucination_threshold: number;
   min_tasks_for_rating: number;
   evaluation_window_tasks: number;
+}
+
+interface ModelHealthRpcResponse {
+  models: ModelEntry[];
+  config: HealthConfig;
+}
+
+interface RpcOutcomeEnvelope<T> {
+  result: T;
+  logs: string[];
+}
+
+type RpcModelHealthPayload = ModelHealthRpcResponse | RpcOutcomeEnvelope<ModelHealthRpcResponse>;
+
+function unwrapPayload(payload: RpcModelHealthPayload): ModelHealthRpcResponse {
+  if (payload && typeof payload === 'object' && 'result' in payload && 'logs' in payload) {
+    return payload.result;
+  }
+  return payload as ModelHealthRpcResponse;
 }
 
 type SortCol =
@@ -84,26 +106,17 @@ const ModelHealthPanel = () => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
     (async () => {
+      log('[model-health] fetch start');
       try {
-        const [baseUrl, token] = await Promise.all([getCoreHttpBaseUrl(), getCoreRpcToken()]);
-        if (!token) {
-          setLoading(false);
-          return;
-        }
-        const res = await fetch(`${baseUrl}/models/health`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const payload = await callCoreRpc<RpcModelHealthPayload>({
+          method: 'openhuman.dashboard_model_health',
         });
-        if (!res.ok) {
-          setLoading(false);
-          return;
-        }
-        const data = await res.json();
-        if (data.ok) {
-          setModels(data.models || []);
-          if (data.config) setConfig(data.config);
-        }
-      } catch {
-        /* network error */
+        const data = unwrapPayload(payload);
+        setModels(data.models || []);
+        if (data.config) setConfig(data.config);
+        log('[model-health] fetch ok models=%d', data.models?.length ?? 0);
+      } catch (err) {
+        log('[model-health] fetch failed: %o', err);
       }
       setLoading(false);
     })();
@@ -296,28 +309,34 @@ const ModelHealthPanel = () => {
               {swapTarget.id} — {t('settings.modelHealth.modal.hallucRate')}:{' '}
               {((swapTarget.hallucination_rate ?? 0) * 100).toFixed(1)}%
             </p>
-            <div className="space-y-2 mb-4">
-              {[...replaceCandidates(swapTarget), ...betterCandidates(swapTarget)].map(c => (
-                <div
-                  key={c.id}
-                  onClick={() => setSelectedCandidate(c)}
-                  className={`rounded-lg border p-2 flex items-center justify-between cursor-pointer ${selectedCandidate?.id === c.id ? 'border-green-500 bg-green-500/15' : 'border-green-500/30 bg-green-500/5'}`}>
-                  <div>
-                    <div className="text-xs font-semibold">{c.id}</div>
-                    <div className="text-[10px] text-stone-400">
-                      {c.hallucination_rate !== null
-                        ? (c.hallucination_rate * 100).toFixed(1)
-                        : '?'}
-                      % · ${c.cost_per_1m_output.toFixed(2)}/1M
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-bold text-green-400">
-                    {c.cost_per_1m_output <= swapTarget.cost_per_1m_output
-                      ? t('settings.modelHealth.tag.cheaper')
-                      : t('settings.modelHealth.tag.better')}
-                  </span>
-                </div>
-              ))}
+            <div className="space-y-2 mb-4" role="radiogroup">
+              {[...replaceCandidates(swapTarget), ...betterCandidates(swapTarget)].map(c => {
+                const isSelected = selectedCandidate?.id === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
+                    onClick={() => setSelectedCandidate(c)}
+                    className={`w-full text-left rounded-lg border p-2 flex items-center justify-between cursor-pointer ${isSelected ? 'border-green-500 bg-green-500/15' : 'border-green-500/30 bg-green-500/5'}`}>
+                    <span>
+                      <span className="block text-xs font-semibold">{c.id}</span>
+                      <span className="block text-[10px] text-stone-400">
+                        {c.hallucination_rate !== null
+                          ? (c.hallucination_rate * 100).toFixed(1)
+                          : '?'}
+                        % · ${c.cost_per_1m_output.toFixed(2)}/1M
+                      </span>
+                    </span>
+                    <span className="text-[9px] font-bold text-green-400">
+                      {c.cost_per_1m_output <= swapTarget.cost_per_1m_output
+                        ? t('settings.modelHealth.tag.cheaper')
+                        : t('settings.modelHealth.tag.better')}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
             <div className="flex gap-2">
               <button
@@ -334,6 +353,16 @@ const ModelHealthPanel = () => {
                 disabled={!selectedCandidate}
                 className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-40"
                 onClick={() => {
+                  if (selectedCandidate && swapTarget) {
+                    // Apply is currently UI-only: the backend swap RPC is a
+                    // follow-up (no agent → model rewire wiring yet). Log the
+                    // operator's intent so it shows up in support logs.
+                    log(
+                      '[model-health] swap intent recorded from=%s to=%s (no-op backend follow-up pending)',
+                      swapTarget.id,
+                      selectedCandidate.id
+                    );
+                  }
                   setSwapTarget(null);
                   setSelectedCandidate(null);
                 }}>

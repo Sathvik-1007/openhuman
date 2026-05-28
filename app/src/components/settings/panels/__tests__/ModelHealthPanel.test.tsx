@@ -4,17 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../../test/test-utils';
 import ModelHealthPanel from '../ModelHealthPanel';
 
-vi.mock('../../../../services/coreRpcClient', () => ({
-  getCoreHttpBaseUrl: vi.fn().mockResolvedValue('http://localhost:9999'),
-  getCoreRpcToken: vi.fn().mockResolvedValue('test-token'),
-}));
+vi.mock('../../../../services/coreRpcClient', () => ({ callCoreRpc: vi.fn() }));
 vi.mock('../../hooks/useSettingsNavigation', () => ({
   useSettingsNavigation: () => ({ navigateBack: vi.fn(), breadcrumbs: [] }),
 }));
 vi.mock('../../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
 
 const MOCK_RESPONSE = {
-  ok: true,
   models: [
     {
       id: 'deepseek-v3',
@@ -50,15 +46,23 @@ const MOCK_RESPONSE = {
   config: { hallucination_threshold: 0.1, min_tasks_for_rating: 10, evaluation_window_tasks: 50 },
 };
 
+async function mockRpc(response: unknown) {
+  const { callCoreRpc } = await import('../../../../services/coreRpcClient');
+  vi.mocked(callCoreRpc).mockResolvedValueOnce(response);
+}
+
+async function mockRpcReject(err: unknown) {
+  const { callCoreRpc } = await import('../../../../services/coreRpcClient');
+  vi.mocked(callCoreRpc).mockRejectedValueOnce(err);
+}
+
 describe('ModelHealthPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('renders panel with table', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('deepseek-v3')).toBeTruthy();
@@ -68,9 +72,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('shows correct status badges', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('deepseek-v3')).toBeTruthy();
@@ -81,9 +83,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('filters by status', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     const { container } = renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('deepseek-v3')).toBeTruthy();
@@ -97,9 +97,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('sorts by column', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('deepseek-v3')).toBeTruthy();
@@ -111,9 +109,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('shows swap button for replace-flagged models', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
@@ -121,9 +117,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('opens swap modal on click', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
@@ -135,12 +129,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('shows empty state when no models', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ ok: true, models: [], config: MOCK_RESPONSE.config }),
-      });
+    await mockRpc({ models: [], config: MOCK_RESPONSE.config });
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('settings.modelHealth.empty')).toBeTruthy();
@@ -148,28 +137,24 @@ describe('ModelHealthPanel', () => {
   });
 
   it('shows loading then content', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByTestId('model-health-panel')).toBeTruthy();
     });
   });
 
-  it('handles missing token gracefully', async () => {
-    const { getCoreRpcToken } = await import('../../../../services/coreRpcClient');
-    vi.mocked(getCoreRpcToken).mockResolvedValueOnce(null as unknown as string);
-    global.fetch = vi.fn();
+  it('unwraps RpcOutcome {result, logs} envelope', async () => {
+    await mockRpc({ result: MOCK_RESPONSE, logs: ['dashboard.model_health returned 3 models'] });
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
-      expect(screen.getByText('settings.modelHealth.empty')).toBeTruthy();
+      expect(screen.getByText('deepseek-v3')).toBeTruthy();
     });
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(screen.getByText('qwen-2.5-8b')).toBeTruthy();
   });
 
-  it('handles non-ok fetch response', async () => {
-    global.fetch = vi.fn().mockResolvedValue({ ok: false });
+  it('handles rpc failure gracefully', async () => {
+    await mockRpcReject(new Error('config unavailable'));
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('settings.modelHealth.empty')).toBeTruthy();
@@ -177,9 +162,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('toggles sort direction on same column click', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('deepseek-v3')).toBeTruthy();
@@ -192,9 +175,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('modal shows candidates and closes on backdrop click', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
@@ -214,9 +195,7 @@ describe('ModelHealthPanel', () => {
   });
 
   it('closes modal on cancel', async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    await mockRpc(MOCK_RESPONSE);
     renderWithProviders(<ModelHealthPanel />);
     await waitFor(() => {
       expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
@@ -226,6 +205,29 @@ describe('ModelHealthPanel', () => {
       expect(screen.getByText('settings.modelHealth.modal.title')).toBeTruthy();
     });
     fireEvent.click(screen.getByText('settings.modelHealth.modal.cancel'));
+    await waitFor(() => {
+      expect(screen.queryByText('settings.modelHealth.modal.title')).toBeNull();
+    });
+  });
+
+  it('Apply button is disabled until a candidate is selected', async () => {
+    await mockRpc(MOCK_RESPONSE);
+    renderWithProviders(<ModelHealthPanel />);
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('settings.modelHealth.swap'));
+    const applyButton = await screen.findByText('settings.modelHealth.modal.apply');
+    expect((applyButton as HTMLButtonElement).disabled).toBe(true);
+
+    // Select a candidate then re-check.
+    const candidates = screen.getAllByRole('radio');
+    expect(candidates.length).toBeGreaterThan(0);
+    fireEvent.click(candidates[0]);
+    expect((applyButton as HTMLButtonElement).disabled).toBe(false);
+
+    // Clicking Apply closes the modal (UI-side; backend swap is a follow-up).
+    fireEvent.click(applyButton);
     await waitFor(() => {
       expect(screen.queryByText('settings.modelHealth.modal.title')).toBeNull();
     });

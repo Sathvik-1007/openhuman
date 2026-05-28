@@ -862,7 +862,6 @@ pub fn build_core_http_router(socketio_enabled: bool) -> Router {
         .route("/schema", get(schema_handler))
         .route("/events", get(events_handler))
         .route("/events/webhooks", get(webhook_events_handler))
-        .route("/models/health", get(model_health_handler))
         .route("/rpc", post(rpc_handler))
         .route("/ws/dictation", get(dictation_ws_handler))
         .route("/auth", get(desktop_auth_handler))
@@ -1185,74 +1184,6 @@ async fn webhook_events_handler() -> Response {
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10)))
         .into_response()
-}
-
-/// Model health comparison data for the dashboard panel.
-async fn model_health_handler(headers: axum::http::HeaderMap) -> Response {
-    let bearer = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let bearer_ok = bearer
-        .map(crate::core::auth::verify_bearer_token)
-        .unwrap_or(false);
-    if !bearer_ok {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"ok": false, "error": "unauthorized"})),
-        )
-            .into_response();
-    }
-
-    let cfg = match crate::openhuman::config::rpc::load_config_with_timeout().await {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("[models/health] config load failed: {e}");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"ok": false, "error": "config unavailable"})),
-            )
-                .into_response();
-        }
-    };
-    let mh_cfg = &cfg.dashboard.model_health;
-    if !mh_cfg.enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"ok": false, "error": "model health disabled"})),
-        )
-            .into_response();
-    }
-
-    let models: Vec<serde_json::Value> = cfg
-        .model_registry
-        .iter()
-        .map(|entry| {
-            json!({
-                "id": entry.id,
-                "provider": entry.provider,
-                "cost_per_1m_output": entry.cost_per_1m_output,
-                "vision": entry.vision,
-                "quality_score": serde_json::Value::Null,
-                "hallucination_rate": serde_json::Value::Null,
-                "agents_using": 0,
-                "tasks_evaluated": 0,
-            })
-        })
-        .collect();
-
-    Json(json!({
-        "ok": true,
-        "models": models,
-        "config": {
-            "hallucination_threshold": mh_cfg.hallucination_threshold,
-            "min_tasks_for_rating": mh_cfg.min_tasks_for_rating,
-            "evaluation_window_tasks": mh_cfg.evaluation_window_tasks,
-        },
-    }))
-    .into_response()
 }
 
 /// Handler for the root endpoint, returning server information and available endpoints.
