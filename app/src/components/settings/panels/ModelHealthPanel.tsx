@@ -76,6 +76,7 @@ const ModelHealthPanel = () => {
   const [sortAsc, setSortAsc] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [swapTarget, setSwapTarget] = useState<ModelEntry | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<ModelEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const fetchedRef = useRef(false);
 
@@ -135,8 +136,7 @@ const ModelHealthPanel = () => {
       c =>
         c.id !== target.id &&
         !c.vision &&
-        (c.hallucination_rate ?? 1) < (target.hallucination_rate ?? 1) &&
-        c.cost_per_1m_output <= target.cost_per_1m_output
+        (c.hallucination_rate ?? 1) < (target.hallucination_rate ?? 1)
     );
 
   const sortIcon = (col: SortCol) => (sortCol === col ? (sortAsc ? ' ↑' : ' ↓') : '');
@@ -272,7 +272,10 @@ const ModelHealthPanel = () => {
       {swapTarget && (
         <div
           className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center"
-          onClick={() => setSwapTarget(null)}>
+          onClick={() => {
+            setSwapTarget(null);
+            setSelectedCandidate(null);
+          }}>
           <div
             className="bg-white dark:bg-neutral-900 border border-stone-200 dark:border-neutral-700 rounded-xl p-5 max-w-sm w-full mx-4"
             onClick={e => e.stopPropagation()}>
@@ -285,7 +288,8 @@ const ModelHealthPanel = () => {
               {replaceCandidates(swapTarget).map(c => (
                 <div
                   key={c.id}
-                  className="rounded-lg border border-green-500/30 bg-green-500/5 p-2 flex items-center justify-between">
+                  onClick={() => setSelectedCandidate(c)}
+                  className={`rounded-lg border p-2 flex items-center justify-between cursor-pointer ${selectedCandidate?.id === c.id ? 'border-green-500 bg-green-500/15' : 'border-green-500/30 bg-green-500/5'}`}>
                   <div>
                     <div className="text-xs font-semibold">{c.id}</div>
                     <div className="text-[10px] text-stone-400">
@@ -307,13 +311,20 @@ const ModelHealthPanel = () => {
               <button
                 type="button"
                 className="flex-1 py-2 rounded-lg border border-stone-200 dark:border-neutral-700 text-xs"
-                onClick={() => setSwapTarget(null)}>
+                onClick={() => {
+                  setSwapTarget(null);
+                  setSelectedCandidate(null);
+                }}>
                 {t('settings.modelHealth.modal.cancel')}
               </button>
               <button
                 type="button"
-                className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold"
-                onClick={() => setSwapTarget(null)}>
+                disabled={!selectedCandidate}
+                className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-40"
+                onClick={() => {
+                  setSwapTarget(null);
+                  setSelectedCandidate(null);
+                }}>
                 {t('settings.modelHealth.modal.apply')}
               </button>
             </div>
