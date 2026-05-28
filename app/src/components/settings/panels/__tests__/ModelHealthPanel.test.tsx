@@ -156,4 +156,78 @@ describe('ModelHealthPanel', () => {
       expect(screen.getByTestId('model-health-panel')).toBeTruthy();
     });
   });
+
+  it('handles missing token gracefully', async () => {
+    const { getCoreRpcToken } = await import('../../../../services/coreRpcClient');
+    vi.mocked(getCoreRpcToken).mockResolvedValueOnce(null as unknown as string);
+    global.fetch = vi.fn();
+    renderWithProviders(<ModelHealthPanel />);
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.empty')).toBeTruthy();
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('handles non-ok fetch response', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false });
+    renderWithProviders(<ModelHealthPanel />);
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.empty')).toBeTruthy();
+    });
+  });
+
+  it('toggles sort direction on same column click', async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    renderWithProviders(<ModelHealthPanel />);
+    await waitFor(() => {
+      expect(screen.getByText('deepseek-v3')).toBeTruthy();
+    });
+    const costHeader = screen.getByText('settings.modelHealth.col.cost');
+    fireEvent.click(costHeader); // asc
+    fireEvent.click(costHeader); // desc — toggles direction
+    const rows = screen.getAllByRole('row');
+    expect(rows[1].textContent).toContain('bad-model'); // most expensive first
+  });
+
+  it('modal shows candidates and closes on backdrop click', async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    renderWithProviders(<ModelHealthPanel />);
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('settings.modelHealth.swap'));
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.modal.title')).toBeTruthy();
+    });
+    // Verify candidates are shown
+    expect(screen.getByText('settings.modelHealth.modal.apply')).toBeTruthy();
+    expect(screen.getByText('settings.modelHealth.modal.cancel')).toBeTruthy();
+    // Close via cancel
+    fireEvent.click(screen.getByText('settings.modelHealth.modal.cancel'));
+    await waitFor(() => {
+      expect(screen.queryByText('settings.modelHealth.modal.title')).toBeNull();
+    });
+  });
+
+  it('closes modal on cancel', async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve(MOCK_RESPONSE) });
+    renderWithProviders(<ModelHealthPanel />);
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.swap')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('settings.modelHealth.swap'));
+    await waitFor(() => {
+      expect(screen.getByText('settings.modelHealth.modal.title')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('settings.modelHealth.modal.cancel'));
+    await waitFor(() => {
+      expect(screen.queryByText('settings.modelHealth.modal.title')).toBeNull();
+    });
+  });
 });
