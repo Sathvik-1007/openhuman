@@ -136,7 +136,17 @@ const ModelHealthPanel = () => {
       c =>
         c.id !== target.id &&
         !c.vision &&
-        (c.hallucination_rate ?? 1) < (target.hallucination_rate ?? 1)
+        (c.hallucination_rate ?? 1) < (target.hallucination_rate ?? 1) &&
+        c.cost_per_1m_output <= target.cost_per_1m_output
+    );
+
+  const betterCandidates = (target: ModelEntry) =>
+    models.filter(
+      c =>
+        c.id !== target.id &&
+        !c.vision &&
+        (c.hallucination_rate ?? 1) < (target.hallucination_rate ?? 1) &&
+        c.cost_per_1m_output > target.cost_per_1m_output
     );
 
   const sortIcon = (col: SortCol) => (sortCol === col ? (sortAsc ? ' ↑' : ' ↓') : '');
@@ -217,7 +227,9 @@ const ModelHealthPanel = () => {
                   const status = getStatus(m, config);
                   const badge = BADGE_STYLES[status];
                   const isReplace = status === 'replace';
-                  const candidates = isReplace ? replaceCandidates(m) : [];
+                  const candidates = isReplace
+                    ? [...replaceCandidates(m), ...betterCandidates(m)]
+                    : [];
                   return (
                     <tr
                       key={m.id}
@@ -285,7 +297,7 @@ const ModelHealthPanel = () => {
               {((swapTarget.hallucination_rate ?? 0) * 100).toFixed(1)}%
             </p>
             <div className="space-y-2 mb-4">
-              {replaceCandidates(swapTarget).map(c => (
+              {[...replaceCandidates(swapTarget), ...betterCandidates(swapTarget)].map(c => (
                 <div
                   key={c.id}
                   onClick={() => setSelectedCandidate(c)}
@@ -300,7 +312,7 @@ const ModelHealthPanel = () => {
                     </div>
                   </div>
                   <span className="text-[9px] font-bold text-green-400">
-                    {c.cost_per_1m_output < swapTarget.cost_per_1m_output
+                    {c.cost_per_1m_output <= swapTarget.cost_per_1m_output
                       ? t('settings.modelHealth.tag.cheaper')
                       : t('settings.modelHealth.tag.better')}
                   </span>
