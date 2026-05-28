@@ -58,7 +58,6 @@ pub fn update_profile(profile_id: &str, samples: &[i16]) -> Result<(), String> {
     }
     p.sample_count += 1;
     let count = p.sample_count;
-    drop(p);
     save_profiles_to_disk(&store);
     debug!("[voice-profiles] updated {} samples={}", profile_id, count);
     Ok(())
