@@ -821,7 +821,8 @@ impl DomainEvent {
             Self::ChannelMessageReceived { channel, .. }
             | Self::ChannelConnected { channel, .. }
             | Self::ChannelDisconnected { channel, .. } => Some(channel.as_str()),
-            Self::ToolExecutionStarted { tool_name, .. } => Some(tool_name.as_str()),
+            Self::ToolExecutionStarted { tool_name, .. }
+            | Self::ToolExecutionCompleted { tool_name, .. } => Some(tool_name.as_str()),
             _ => None,
         }
     }
