@@ -488,21 +488,66 @@ mod tests {
 
     #[test]
     fn ingest_and_query_executes() {
+        // Use a dedicated dataset rather than the shared "sample_metrics" key:
+        // other tests replace that key's rows concurrently, which would race.
+        let ds = register_dataset(
+            "Ingest Query Test",
+            DataSource::Csv,
+            vec!["value".into()],
+            10,
+        )
+        .unwrap();
         let mut rows = Vec::new();
         for i in 0..10 {
             let mut row = HashMap::new();
             row.insert("value".to_string(), i as f64 * 10.0);
             rows.push(row);
         }
-        ingest_rows("sample_metrics", rows);
-        let r = query_dataset("sample_metrics", "What is the average value?").unwrap();
+        ingest_rows(&ds.id, rows);
+        let r = query_dataset(&ds.id, "What is the average value?").unwrap();
         // Should execute in-memory and return a numeric result.
         assert!(r.confidence >= 0.9);
         assert!(r.answer.contains("Result:") || r.answer.contains("AVG"));
+        let _ = delete_dataset(&ds.id);
+    }
+
+    #[test]
+    fn delete_dataset_clears_row_store() {
+        let d = register_dataset("Delete Me", DataSource::Csv, vec!["value".into()], 1).unwrap();
+        let mut row = HashMap::new();
+        row.insert("value".to_string(), 1.0);
+        ingest_rows(&d.id, vec![row]);
+        // Rows are present in the in-memory store before deletion.
+        assert!(ROW_STORE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&d.id));
+        delete_dataset(&d.id).unwrap();
+        // Deleting the dataset also evicts its orphaned rows.
+        assert!(!ROW_STORE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&d.id));
+        assert!(get_dataset(&d.id).is_err());
+    }
+
+    #[test]
+    fn delete_dataset_not_found() {
+        assert!(delete_dataset("ds-does-not-exist").is_err());
     }
 
     #[test]
     fn proactive_scan_with_data() {
+        // Register a dedicated dataset so a concurrent test mutating the shared
+        // "sample_metrics" rows between this ingest and the scan can't clear our
+        // outlier and make the scan come back empty (previously a flaky race).
+        let ds = register_dataset(
+            "Proactive Scan Test",
+            DataSource::Csv,
+            vec!["value".into()],
+            51,
+        )
+        .unwrap();
         let mut rows = Vec::new();
         for _i in 0..50 {
             let mut row = HashMap::new();
@@ -513,9 +558,15 @@ mod tests {
         let mut outlier = HashMap::new();
         outlier.insert("value".to_string(), 500.0);
         rows.push(outlier);
-        ingest_rows("sample_metrics", rows);
+        ingest_rows(&ds.id, rows);
         let insights = scan_all_datasets_for_anomalies();
-        assert!(!insights.is_empty());
+        // Our dedicated dataset's outlier guarantees at least one insight; every
+        // insight the scan emits is titled "Proactive: anomaly in <dataset>".
+        assert!(
+            insights.iter().any(|i| i.dataset == ds.id),
+            "proactive scan should flag the dedicated dataset"
+        );
         assert!(insights[0].title.contains("Proactive"));
+        let _ = delete_dataset(&ds.id);
     }
 }

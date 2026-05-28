@@ -340,6 +340,26 @@ mod tests {
     }
 
     #[test]
+    fn zscore_rejects_invalid_threshold() {
+        let mut data = vec![10.0; 100];
+        data[50] = 100.0;
+        assert!(detect_zscore(&data, 0.0).is_empty());
+        assert!(detect_zscore(&data, -1.0).is_empty());
+        assert!(detect_zscore(&data, f64::NAN).is_empty());
+        assert!(detect_zscore(&data, f64::INFINITY).is_empty());
+    }
+
+    #[test]
+    fn iqr_rejects_invalid_k() {
+        let mut data: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        data.push(100.0);
+        assert!(detect_iqr(&data, 0.0).is_empty());
+        assert!(detect_iqr(&data, -1.0).is_empty());
+        assert!(detect_iqr(&data, f64::NAN).is_empty());
+        assert!(detect_iqr(&data, f64::INFINITY).is_empty());
+    }
+
+    #[test]
     fn combined_boosts_dual_detection() {
         let mut data: Vec<f64> = (1..=50).map(|i| i as f64).collect();
         data.push(500.0); // Extreme outlier — both methods should catch it.
