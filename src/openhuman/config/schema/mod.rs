@@ -55,7 +55,7 @@ pub use channels::{
     TelegramConfig, WebhookConfig, WhatsAppConfig,
 };
 pub use context::ContextConfig;
-pub use dashboard::{DashboardConfig, EventStreamConfig, ModelHealthConfig};
+pub use dashboard::{DashboardConfig, DiagramViewerConfig, EventStreamConfig, ModelHealthConfig};
 pub use dictation::{DictationActivationMode, DictationConfig};
 pub use heartbeat_cron::{CronConfig, HeartbeatConfig};
 pub use identity_cost::{CostConfig, ModelPricing};
