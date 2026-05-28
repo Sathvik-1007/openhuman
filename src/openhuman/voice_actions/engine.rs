@@ -487,4 +487,19 @@ mod tests {
         let i = recognize_intent("start voice assistant").unwrap();
         assert_eq!(i.namespace, "voice_assistant");
     }
+
+    #[test]
+    fn record_context_stays_bounded() {
+        // Recording more than MAX_CONTEXTS distinct sessions must not grow
+        // CONTEXTS past the cap — record_context evicts before inserting.
+        let prefix = format!("bounded-{}-", crate::openhuman::util::uuid_v4());
+        for n in 0..(MAX_CONTEXTS * 2) {
+            record_context(&format!("{prefix}{n}"), &format!("intent-{n}"));
+            let len = CONTEXTS.lock().unwrap_or_else(|e| e.into_inner()).len();
+            assert!(
+                len <= MAX_CONTEXTS,
+                "CONTEXTS grew to {len}, exceeding MAX_CONTEXTS {MAX_CONTEXTS}"
+            );
+        }
+    }
 }
