@@ -27,6 +27,7 @@ pub mod autocomplete;
 pub mod billing;
 pub mod channels;
 pub mod chat_with_data;
+pub mod codegraph;
 pub mod composio;
 pub mod config;
 pub mod connectivity;
