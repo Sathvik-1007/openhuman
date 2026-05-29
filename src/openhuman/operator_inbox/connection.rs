@@ -178,8 +178,11 @@ pub async fn send_reply(
     use lettre::transport::smtp::authentication::Credentials;
     use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-    info!("{LOG_PREFIX} sending reply to_domain={} subject_len={}",
-        to.split('@').nth(1).unwrap_or("unknown"), subject.len());
+    info!(
+        "{LOG_PREFIX} sending reply to_domain={} subject_len={}",
+        to.split('@').nth(1).unwrap_or("unknown"),
+        subject.len()
+    );
 
     let email = Message::builder()
         .from(
@@ -206,7 +209,10 @@ pub async fn send_reply(
         .await
         .map_err(|e| format!("{LOG_PREFIX} SMTP send: {e}"))?;
 
-    info!("{LOG_PREFIX} reply sent to_domain={}", to.split('@').nth(1).unwrap_or("unknown"));
+    info!(
+        "{LOG_PREFIX} reply sent to_domain={}",
+        to.split('@').nth(1).unwrap_or("unknown")
+    );
     Ok(())
 }
 

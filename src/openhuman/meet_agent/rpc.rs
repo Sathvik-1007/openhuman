@@ -291,7 +291,6 @@ fn decode_pcm16le_b64(b64: &str) -> Result<Vec<i16>, String> {
         .collect())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
