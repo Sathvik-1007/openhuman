@@ -1,4 +1,4 @@
-# YC Capabilities — PR #2261
+# VC Capabilities — PR #2261
 
 Six production-grade AI modules covering voice, captions, actions, email triage,
 data analytics, and guided onboarding. All implemented as Rust-core domains with
