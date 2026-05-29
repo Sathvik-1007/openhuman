@@ -273,24 +273,6 @@ pub async fn handle_list_calls(params: Map<String, Value>) -> Result<Value, Stri
     RpcOutcome::new(value, vec![]).into_cli_compatible_json()
 }
 
-/// Decode a base64 string of PCM16LE bytes into samples. Empty input is
-/// a "heartbeat" push (no audio this tick) and yields an empty Vec.
-fn decode_pcm16le_b64(b64: &str) -> Result<Vec<i16>, String> {
-    if b64.is_empty() {
-        return Ok(Vec::new());
-    }
-    let bytes = B64
-        .decode(b64.as_bytes())
-        .map_err(|e| format!("base64: {e}"))?;
-    if !bytes.len().is_multiple_of(2) {
-        return Err(format!("odd byte length {}", bytes.len()));
-    }
-    Ok(bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
