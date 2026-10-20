@@ -88,8 +88,10 @@ async fn publish_until(ws: &mut Ws, name: &str, publish: impl Fn()) -> Value {
     panic!("`{name}` never reached the client");
 }
 
-/// Connects and authenticates; returns the socket and its `client_id` room.
-async fn connect(addr: std::net::SocketAddr) -> (Ws, String) {
+/// Connects and authenticates, returning as soon as the namespace CONNECT ack
+/// arrives. That is the point where the app's `connect` handler starts
+/// sending events, `thread:subscribe` included, without waiting for `ready`.
+async fn connect(addr: std::net::SocketAddr) -> Ws {
     let url = format!("ws://{addr}/socket.io/?EIO=4&transport=websocket");
     let (mut ws, _) = tokio_tungstenite::connect_async(url)
         .await
@@ -99,12 +101,11 @@ async fn connect(addr: std::net::SocketAddr) -> (Ws, String) {
     ws.send(Message::text(format!("40{}", json!({ "token": TOKEN }))))
         .await
         .expect("namespace connect");
-    let ready = wait_for(&mut ws, "ready").await;
-    let sid = ready["sid"]
-        .as_str()
-        .expect("ready carries sid")
-        .to_string();
-    (ws, sid)
+    loop {
+        if next_frame(&mut ws).await.starts_with("40") {
+            return ws;
+        }
+    }
 }
 
 /// Event names received until `end` arrives, in order, `end` excluded.
@@ -183,23 +184,37 @@ async fn run() {
     let server =
         tokio::spawn(async move { axum::serve(listener, build_core_http_router(true)).await });
 
-    let (mut ws, sid) = connect(addr).await;
+    let mut ws = connect(addr).await;
 
-    // Join the thread room; the ack reports the join.
+    // Join the thread room straight after connecting, as the app does, then
+    // expect both the ack for the join and `ready` with this socket's id.
     ws.send(Message::text(format!(
         "421{}",
         json!(["thread:subscribe", { "thread_id": "t1" }])
     )))
     .await
     .expect("thread:subscribe");
-    loop {
+    let mut sid = None;
+    let mut joined = false;
+    while sid.is_none() || !joined {
         let frame = next_frame(&mut ws).await;
         if let Some(ack) = frame.strip_prefix("431") {
             let ack: Value = serde_json::from_str(ack).expect("ack json");
             assert_eq!(ack, json!([{ "joined": true }]), "{frame}");
-            break;
+            joined = true;
+        } else if let Some(("ready", payload)) = event_of(&frame)
+            .as_ref()
+            .map(|(name, payload)| (name.as_str(), payload))
+        {
+            sid = Some(
+                payload["sid"]
+                    .as_str()
+                    .expect("ready carries sid")
+                    .to_string(),
+            );
         }
     }
+    let sid = sid.unwrap();
 
     // Web channel: once the bridge is listening, a frame addressed to a
     // client that is also in the thread room arrives once under each name.

@@ -243,7 +243,11 @@ pub fn attach_socketio() -> (socketioxide::layer::SocketIoLayer, SocketIo) {
 
     io.ns(
         "/",
-        |socket: SocketRef, TryData(handshake): TryData<HandshakeAuth>| async move {
+        // Everything runs in the closure body, not in the future it returns:
+        // socketioxide 0.18 sends the namespace CONNECT packet before calling
+        // this handler and spawns the returned future, so handlers registered
+        // inside an `async` block could miss a client's first events.
+        |socket: SocketRef, TryData(handshake): TryData<HandshakeAuth>| {
             let client_id = socket.id.to_string();
 
             // Reject cross-origin browser pages before the handshake completes.
@@ -263,7 +267,7 @@ pub fn attach_socketio() -> (socketioxide::layer::SocketIoLayer, SocketIo) {
                     client_id
                 );
                 let _ = socket.clone().disconnect();
-                return;
+                return std::future::ready(());
             }
 
             // Verify the handshake bearer matches the per-process RPC token.
@@ -276,7 +280,7 @@ pub fn attach_socketio() -> (socketioxide::layer::SocketIoLayer, SocketIo) {
                     client_id
                 );
                 let _ = socket.clone().disconnect();
-                return;
+                return std::future::ready(());
             }
             socket.extensions.insert(AuthedConnection);
 
@@ -292,9 +296,6 @@ pub fn attach_socketio() -> (socketioxide::layer::SocketIoLayer, SocketIo) {
             // Without this join the welcome message silently disappears,
             // so it is logged for diagnosability.
             join_room_logged(&socket, "system", &client_id);
-            let ready_payload = json!({ "sid": client_id });
-            log::debug!("[socketio] emit event=ready to_client={}", socket.id);
-            let _ = socket.emit("ready", &ready_payload);
 
             // Seed this client with the workspace that is current (#5966).
             // The `workspace_changed` bridge in `spawn_web_channel_bridge`
@@ -539,6 +540,13 @@ pub fn attach_socketio() -> (socketioxide::layer::SocketIoLayer, SocketIo) {
                     ack.send(&ThreadSubscribeAck { joined: true }).ok();
                 },
             );
+
+            // `ready` goes out last, so a client that waits for it can rely on
+            // every handler above being registered.
+            let ready_payload = json!({ "sid": client_id });
+            log::debug!("[socketio] emit event=ready to_client={}", socket.id);
+            let _ = socket.emit("ready", &ready_payload);
+            std::future::ready(())
         },
     );
 
